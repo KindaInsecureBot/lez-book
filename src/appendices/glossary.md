@@ -98,7 +98,7 @@ The Rust library crate that provides the core types and traits for writing LEZ p
 
 ## LEZ
 
-Logos Execution Zone — a specific instantiation of the LEE (Logos Execution Environment) deployed by the Logos Network. The project evolved from Nescience → NSSA (Nondeterministic State Sequencer Architecture) → LSSA (Logos SSA) → LEE → LEZ. The privacy-native ZK smart contract execution layer of the Logos Network (logos.co), built by IFT (Institute of Free Technology). LEZ programs are compiled to RISC Zero guest binaries, executed in a zkVM, and verified by the `lssa` sequencer. Privacy is a first-class feature: private (shielded) accounts use commitments and nullifiers to enable confidential state transitions without revealing account contents.
+Logos Execution Zone — a specific instantiation of the LEE (Logos Execution Environment) deployed by the Logos Network. The project evolved from Nescience → NSSA (Nescience State Separation Architecture) → LSSA (Logos SSA) → LEE → LEZ. The privacy-native ZK smart contract execution layer of the Logos Network (logos.co), built by IFT (Institute of Free Technology). LEZ programs are compiled to RISC Zero guest binaries, executed in a zkVM, and verified by the `lssa` sequencer. Privacy is a first-class feature: private (shielded) accounts use commitments and nullifiers to enable confidential state transitions without revealing account contents.
 
 ---
 
@@ -142,7 +142,7 @@ The root secret for all private accounts in a LEZ wallet. All private account sp
 
 ## NSSA
 
-Nondeterministic State Sequencer Architecture. The protocol layer underlying LEZ. NSSA defines how the sequencer manages state, commitment trees, nullifier sets, and proof verification. LEZ programs run on top of NSSA — the `lssa` daemon implements the NSSA protocol. Most application developers interact with NSSA indirectly through `lez_framework` and `lez-cli`.
+Nescience State Separation Architecture. The protocol layer underlying LEZ. NSSA defines how the sequencer manages state, commitment trees, nullifier sets, and proof verification. LEZ programs run on top of NSSA — the `lssa` daemon implements the NSSA protocol. Most application developers interact with NSSA indirectly through `lez_framework` and `lez-cli`.
 
 ---
 
