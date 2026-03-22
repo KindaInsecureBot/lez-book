@@ -1,265 +1,256 @@
 # Deployment Checklist
 
-This chapter covers local development workflow, testing strategies, security considerations, and a pre-deployment checklist for taking a LEZ program from "works on my machine" to a reproducible deployed state.
-
----
-
-## Local Development Workflow
-
-The standard local workflow:
-
-```bash
-# 1. Start sequencer (separate terminal)
-sequencer_runner --port 3040
-
-# 2. Build your program
-make build
-
-# 3. Generate IDL
-make idl
-
-# 4. Run local tests
-cargo test
-
-# 5. Deploy program
-make setup
-make deploy
-
-# 6. Interact
-make cli ARGS="initialize ..."
-make cli ARGS="increment ..."
-```
-
-> **💡 Tip:** Keep the sequencer running in a dedicated terminal tab for the entire session. If you kill and restart it between steps, you'll need to re-deploy your program since the sequencer's state is cleared.
-
----
-
-## Testing Patterns
-
-### Unit Tests (Native)
-
-Unit tests run on native (not riscv32im), so the full Rust testing toolkit is available:
-
-```rust
-// In your core crate
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_increment() {
-        // Build mock accounts
-        let counter = mock_account(CounterState::default());
-        let authority = mock_signer_account();
-
-        // Call initialize
-        let output = counter::initialize(counter, authority).unwrap();
-
-        // Verify
-        let states = output.post_states();
-        // ... assertions
-    }
-}
-```
-
-Because the core crate doesn't depend on the guest binary, you can run `cargo test` directly without firing up the zkVM. This makes unit tests fast — milliseconds, not seconds.
-
-### Integration Tests with Live Sequencer
-
-For end-to-end tests that exercise the full ZK proof pipeline:
-
-```rust
-#[tokio::test]
-async fn test_counter_e2e() {
-    let client = LezClient::new("http://localhost:3040");
-
-    let counter_addr = client.create_account().await.unwrap();
-    client.call_instruction(
-        COUNTER_PROGRAM_ID,
-        "initialize",
-        vec![counter_addr, authority_addr],
-        &[],
-    ).await.unwrap();
-
-    let state: CounterState = client.read_account(counter_addr).await.unwrap();
-    assert_eq!(state.count, 0);
-}
-```
-
-Integration tests require a running sequencer and a deployed program binary. Run them separately from unit tests:
-
-```bash
-# Unit tests (fast, no sequencer required)
-cargo test --lib
-
-# Integration tests (requires sequencer on :3040)
-cargo test --test integration
-```
-
-### cfg-Gated Test Helpers
-
-For mock account construction that only compiles in test mode:
-
-```rust
-#[cfg(test)]
-pub fn mock_account<T: Default + BorshSerialize>(data: T) -> AccountWithMetadata<T> {
-    AccountWithMetadata::new_for_test(
-        [0u8; 32], // address
-        data,
-        1000,      // balance
-        0,         // nonce
-    )
-}
-```
-
----
-
-## Security Considerations
-
-### 1. Owner Checks
-
-Always verify that the caller is authorized to modify an account. `#[account(signer)]` proves they control the key, but does not verify they're allowed to modify this specific state.
-
-```rust
-// ❌ Incomplete — proves key control but not authorization
-#[account(signer)] caller: AccountWithMetadata<()>,
-#[account(mut)] config: AccountWithMetadata<ConfigState>,
-
-// ✅ Complete — check the stored admin address too
-if &config.data().admin != caller.id() {
-    return Err(LezError::InvalidSigner);
-}
-```
-
-### 2. PDA Ownership
-
-Use `#[account(owner = PROGRAM_ID)]` to ensure accounts you're modifying were created by your program. Without this, a caller could pass in an account from a different program with crafted data.
-
-```rust
-#[account(mut, owner = MY_PROGRAM_ID)] state: AccountWithMetadata<MyState>,
-```
-
-### 3. Input Validation
-
-Validate numeric inputs — check for overflow and valid ranges. Rust's debug mode catches overflow panics, but release mode wraps silently.
-
-```rust
-// ❌ Silent overflow in release mode
-let new_count = state.count + amount;
-
-// ✅ Explicit overflow check
-let new_count = state.count.checked_add(amount)
-    .ok_or(LezError::Overflow)?;
-```
-
-### 4. Privacy Hygiene
-
-When storing identifying information in public accounts, use commitment hashes rather than raw pubkeys to prevent correlation attacks:
-
-```rust
-// ❌ Raw pubkey — linkable on chain
-pub owner: [u8; 32],
-
-// ✅ Commitment — hides the owner identity
-pub owner_commitment: [u8; 32], // SHA256(owner_pubkey || nonce)
-```
-
-### 5. Deterministic Operations
-
-Everything in your program must be deterministic — the ZK proof requires it. Avoid wall-clock time, non-seeded randomness, and floating-point operations. Use BTreeMap instead of HashMap for ordered iteration.
+This chapter covers the full workflow from a working local program to a deployed, verifiable LEZ program: build commands, setup, deploy, post-deploy verification, and what to know about production environments.
 
 ---
 
 ## Pre-Deployment Checklist
 
-Review each item before deploying to any shared environment:
+Work through this list before running `make deploy`. Each item has caused real deployment failures.
 
-- [ ] All instructions tested locally with the sequencer running
-- [ ] IDL regenerated after the last code change (`make idl`)
-- [ ] Version pinned: note which lssa/spel commits your build used
-- [ ] Memory usage verified: built with `--jobs 2` on target hardware
-- [ ] Account ownership verified: `#[account(owner = ...)]` on all accounts you mutate
-- [ ] All accounts returned in `post_states` verified (no silent deletes)
-- [ ] No `borsh_derive` imports in guest code (use `borsh` features = ["derive"])
-- [ ] Signer accounts are genesis accounts (not PDAs)
-- [ ] Client code regenerated from latest IDL
-- [ ] Custom error codes documented in program README
-- [ ] Arithmetic overflow checked with `checked_add`/`checked_mul` etc.
-- [ ] No non-deterministic operations (no `SystemTime`, no HashMap iteration)
+- [ ] **Program compiles to `riscv32im` without errors**
+  Run `make build` or `cargo build --release` targeting `riscv32im-risc0-zkvm-elf`. Verify the guest ELF is produced in `target/riscv-guest/`. A successful host-side `cargo build` does not guarantee the guest compiles.
+
+- [ ] **All instruction signatures have accounts before args**
+  Every `#[instruction]` function must list all `AccountWithMetadata` parameters before any scalar arguments. Mixing order causes a macro error that points at the wrong line. Review each instruction signature.
+
+- [ ] **All accounts returned in `post_states` (including unmodified ones)**
+  The sequencer requires an exact account count match. For every instruction, count the input accounts and verify that `LezOutput::states_only(...)` returns exactly that many. Include read-only accounts with their original data.
+
+- [ ] **`init` constraints do not also have `mut`**
+  `#[account(init)]` is already mutable. Combining `init` and `mut` causes constraint conflicts. Search your code for `init, mut` or `mut, init` and remove the `mut`.
+
+- [ ] **No `borsh_derive` proc-macros in guest code**
+  `borsh_derive` does not compile for `riscv32im`. Audit your guest crate's `Cargo.toml` and all dependencies for proc-macro crates. All borsh serialization in guest code must be implemented manually.
+
+- [ ] **PDA seeds verified against actual sequencer-assigned addresses**
+  If your program uses integer seeds (u64, u128), `lez-cli pda` may produce wrong addresses. Verify PDA addresses against sequencer logs from a test `init` call before hardcoding them anywhere.
+
+- [ ] **Error codes defined (starting at 6000+)**
+  Custom error codes must start at 6000 to avoid collision with framework error codes (1000–1999). Verify all `LezError::Custom(...)` values in your program use codes >= 6000.
+
+- [ ] **IDL generated and reviewed**
+  Run `make idl` and open the generated JSON. Verify instruction names, account names, argument types, and account ordering match your program. The IDL is what clients and `lez-cli` use to call your program — a wrong IDL means broken clients.
+
+- [ ] **`methods/Cargo.toml` has `[[package.metadata.risc0.methods]]` section**
+  The `lez-cli init` scaffold omits this section. Without it, the build may succeed without producing the correct guest binary. Confirm the section exists and the `name` and `guest_path` fields are correct.
+
+- [ ] **`target/riscv-guest/` cleaned after any dependency changes**
+  Stale artifacts cause hard-to-diagnose link errors. If you changed any dependencies since the last clean build, run `rm -rf target/riscv-guest/` before building for deployment.
 
 ---
 
-## Reproducible Builds
+## Build Workflow
 
-ImageID stability matters: if you deploy a program and the ImageID changes, existing clients break. Reproducible builds ensure byte-for-byte identical guest binaries across machines.
+### Docker Build (Recommended for Reproducibility)
+
+The Docker build produces a reproducible guest binary — the same source always produces the same ImageID regardless of host toolchain version.
 
 ```bash
-# Record exact dependencies
-cargo generate-lockfile
-
-# Build with locked dependencies
-cargo build --release --locked --jobs 2
-
-# Verify ImageID
-cargo run --release -p idl-gen | jq '.program_id'
+make build
 ```
 
-The ImageID will be the same as long as the guest binary is byte-for-byte identical. Using `--locked` ensures the same dependency versions across machines and CI runs.
+This runs the build inside a pinned RISC Zero Docker image. The output is a deterministic guest ELF in `target/riscv-guest/`.
 
-> **💡 Tip:** Commit your `Cargo.lock` file to version control, even for libraries. For LEZ programs, a changing lock file means a changing ImageID means breaking deployed clients.
-
----
-
-## Without Docker
-
-The recommended path for containers and CI:
+### Local Build (Faster for Development)
 
 ```bash
-# Install rzup (RISC Zero's toolchain manager)
-curl -L https://risczero.com/install | bash
-rzup install
-
-# Build with local toolchain (no Docker)
-RISC0_DEV_MODE=0 cargo build --release --jobs 2
+# Requires rzup and the correct RISC Zero toolchain installed
+cargo build --release
 ```
 
-Do NOT use Docker-in-Docker for RISC Zero builds. The rzup local toolchain is reliable and works in standard Linux containers. Docker-in-Docker introduces permission and cgroup issues that are hard to debug and provide no benefit.
+Local builds are faster but the ImageID may differ from a Docker build if toolchain versions differ. Use Docker builds for any deployment you care about reproducibility on.
 
-> **⚠️ Warning:** `RISC0_DEV_MODE=1` skips proof generation and uses fake proofs. This is useful for rapid local iteration but must NEVER be used for deployed programs. Always build with `RISC0_DEV_MODE=0` before deployment.
+### Generate IDL
+
+```bash
+make idl
+# Output: program.json (or as configured in your Makefile)
+```
+
+The IDL is a JSON schema describing all instructions, accounts, and argument types. Clients use this to call your program. Always regenerate the IDL after changing instruction signatures.
+
+### Inspect ImageID
+
+```bash
+make inspect
+# or
+lez-cli inspect --program ./target/riscv-guest/my_program.elf
+```
+
+This outputs the ImageID in three formats:
+- **Hex**: raw bytes as a hex string
+- **Decimal**: big-endian integer representation
+- **ImageID**: the canonical identifier used as your program ID
+
+Note the ImageID before deploying. If you deploy again after code changes, the ImageID will change — see [ImageID Change Implications](#imageid-change-implications) below.
 
 ---
 
-## Makefile Reference
+## Setup and Deploy
 
-A typical LEZ program Makefile has these targets:
+### Setup: Create the Program Account
 
-```makefile
-.PHONY: build idl setup deploy cli clean
-
-build:
-	CARGO_BUILD_JOBS=2 cargo build --release
-
-idl:
-	cargo run --release -p idl-gen > program.json
-
-setup:
-	# Create any required genesis accounts
-	wallet account new
-
-deploy:
-	lez-cli deploy \
-	  --program-binary target/riscv-guest/riscv32im-risc0-zkvm-elf/release/guest \
-	  --idl program.json
-
-cli:
-	lez-cli call \
-	  --idl program.json \
-	  --instruction $(INSTRUCTION) \
-	  $(ARGS)
-
-clean:
-	cargo clean
-	rm -f program.json
+```bash
+make setup
 ```
 
-Adjust paths for your workspace layout. The guest binary path comes from RISC Zero's build system — check your `methods/build.rs` output for the exact path.
+This creates a program account on `lssa`. Run this once for a new program. Running it again for an existing program is safe (it will error if the account already exists, which you can ignore).
+
+Under the hood, this calls something like:
+
+```bash
+lez-cli setup --program-id <image-id> --authority-account <genesis-addr>
+```
+
+### Deploy: Register the ImageID
+
+```bash
+make deploy
+```
+
+This registers your program's ImageID with the sequencer, making it callable. After this step, the sequencer will accept and verify transactions that invoke your program.
+
+If you need to deploy manually (e.g., with a different key):
+
+```bash
+lez-cli deploy \
+  --program ./target/riscv-guest/my_program.elf \
+  --program-id <image-id> \
+  --authority-account <genesis-addr>
+```
+
+---
+
+## Post-Deploy Verification
+
+After deploying, verify the program is registered and callable before announcing it to users.
+
+### Check Program Is Registered
+
+```bash
+lez-cli inspect --program-id <image-id>
+```
+
+A successful response confirms the sequencer knows about your program. If this fails, the deploy did not complete successfully.
+
+### Call Initialize
+
+Most programs have an `initialize` instruction that sets up global state. Call it immediately after deploy:
+
+```bash
+make cli ARGS="initialize --authority-account <genesis-addr>"
+# or directly:
+lez-cli call \
+  --idl program.json \
+  --instruction initialize \
+  --authority-account <genesis-addr>
+```
+
+### Verify State Was Written
+
+After initialization, inspect the PDA that `initialize` should have created:
+
+```bash
+wallet account inspect <pda-addr>
+```
+
+You should see non-empty account data. If the account is empty or not found, check:
+1. The correct PDA address (see gotcha #3 about integer seeds)
+2. That `lssa` is on a working revision (see gotcha #5 about `767b5af`)
+3. That RocksDB state is not stale (see gotcha #4)
+
+### Smoke Test Key Instructions
+
+Call each major instruction at least once with known-good inputs before calling the deployment complete:
+
+```bash
+# Example for a token program
+make cli ARGS="mint --authority-account <auth-addr> --vault-account <vault-addr> --amount 1000000"
+make cli ARGS="transfer --from-account <from-addr> --to-account <to-addr> --amount 100"
+```
+
+---
+
+## ImageID Change Implications
+
+Every change to your program's guest binary — even a one-character comment change — produces a different ImageID. This is by design: the ImageID is a cryptographic commitment to the exact program code.
+
+This means:
+
+- **A redeployed program is a different program.** The new ImageID is a new program ID. Clients pointing at the old ImageID will continue calling the old program (if it still exists on the sequencer) or fail (if it was removed).
+
+- **Accounts owned by the old ImageID cannot be written by the new one.** Account ownership is checked against the program ID at instruction execution time. If you deploy a new version, it cannot modify accounts created under the old version without an explicit migration.
+
+**Options when upgrading a program:**
+
+1. **Migration instruction:** Include a `migrate` instruction in the new program that accepts accounts owned by the old program ID and re-creates them under the new one. This requires careful access control.
+
+2. **New program with data migration:** Deploy the new program, write a one-time migration script that reads old accounts (using the old program's IDL) and creates corresponding new accounts (using the new program), then shut down the old program.
+
+3. **Accept the breaking change:** For programs in early development or with small user bases, a clean break may be simpler. Deploy fresh, reset state, update all client references to the new program ID.
+
+> **🔄 Coming from Solidity?** In Solidity, you typically use proxy patterns (EIP-1967, UUPS) to upgrade contract logic while preserving state at a stable address. LEZ has no proxy pattern — the ImageID is the address and it's immutable. Design for upgrades from the start: keep state migration hooks in mind, or use a stable PDA owned by a governance program that can authorize migrations.
+
+---
+
+## Production Checklist
+
+For deployments beyond local devnet, work through these additional items.
+
+### Sequencer Configuration
+
+- [ ] **Confirm sequencer liveness SLA.** The sequencer is the single point of liveness for your program. Understand the uptime guarantees for your lssa instance.
+- [ ] **Verify sequencer is on a known-good revision.** Do not run production on `767b5af` or other known-broken commits. Pin to a tested revision and track it in your deployment docs.
+- [ ] **Configure the health endpoint.** `lssa` exposes a health check endpoint. Set up monitoring to alert on downtime.
+- [ ] **Review sequencer config for production settings.** Check RPC rate limits, max transaction size, and proof verification timeout values are appropriate for your expected load.
+
+### Key Management
+
+- [ ] **Back up your `nsk` (Nullifier Spending Key).** The `nsk` is the root secret for all private accounts. Loss of the `nsk` means permanent loss of access to private account contents. Store it in a hardware security module or offline cold storage.
+- [ ] **Separate deployment keys from operational keys.** Use a dedicated genesis account for deployment that is separate from operational authority accounts. Restrict access to the deployment key.
+- [ ] **Document all genesis account IDs** and their purposes. Losing the keypair for a genesis account means losing the ability to sign as that account permanently.
+
+### RocksDB Backup Strategy
+
+- [ ] **Set up regular RocksDB snapshots.** RocksDB supports online backups via the backup engine. Schedule these and store them off-host.
+- [ ] **Test recovery from backup.** A backup you haven't tested restoring is not a backup. Verify the recovery procedure works before going to production.
+- [ ] **Configure backup retention.** Keep enough historical snapshots to recover from both immediate failures and slow corruptions.
+
+### Version Pinning
+
+- [ ] **Pin `lssa` revision** in your deployment scripts and documentation.
+- [ ] **Pin `lez-cli` revision** used for deployment.
+- [ ] **Record the exact build command** used to produce the deployed guest binary, including Docker image tag or `rzup` toolchain version.
+- [ ] **Store the expected ImageID** alongside your pinned versions. Verify the ImageID matches during any re-build or re-deploy.
+
+### Monitoring
+
+- [ ] **Sequencer health endpoint:** Set up alerting if the health check fails.
+- [ ] **Proof verification rate:** Monitor how many transactions are being accepted vs. rejected. A high rejection rate may indicate a client bug or a sequencer issue.
+- [ ] **Commitment growth rate:** Track the number of new commitments per time window. Anomalies may indicate bugs or attacks.
+- [ ] **RocksDB disk usage:** Set up disk space alerts. A full disk will crash `lssa`.
+
+---
+
+## Rollback
+
+Because the ImageID is immutable and tied to the exact program binary, traditional "rollback" (reverting to a previous code version at the same address) is not directly possible. Instead:
+
+**Rollback means redirecting clients to the previous program ID.**
+
+1. Keep the old program's deployment artifacts (ELF binary, IDL, ImageID).
+2. If the old program is still registered on the sequencer, clients can switch back immediately by pointing at the old program ID.
+3. If the old program was deregistered, re-deploy it from the old artifacts. The ImageID will be identical to the original, so existing accounts owned by it are still valid.
+
+```bash
+# Re-deploy old version from archived artifacts
+lez-cli deploy \
+  --program ./archive/v1.0/my_program.elf \
+  --program-id <old-image-id> \
+  --authority-account <genesis-addr>
+```
+
+> **💡 Tip:** Never delete old program binaries or IDLs. Archive every deployed version with its ImageID, IDL, and `lssa` revision. This is your rollback kit.
+
+> **⚠️ Warning:** If the new program version wrote any state (new accounts, modified existing accounts), rollback will leave that state in place. The old program cannot read or write accounts it didn't create. Plan for state compatibility if there's any chance you'll need to roll back after users have interacted with the new version.

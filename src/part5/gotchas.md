@@ -6,248 +6,428 @@ This chapter is a field guide to the bugs and surprises that have caught real de
 
 ---
 
-### 1. Genesis Accounts Must Sign (NSSA Rule 7)
+## 1. Genesis Accounts MUST Be Signers — Not PDAs
 
-> **⚠️ Warning:** Derived accounts (PDAs) cannot be signers. Only genesis accounts (accounts created at chain genesis, not derived from seeds) can sign transactions. This is NSSA rule 7.
+**Explanation:** In LEZ, only genesis accounts (keypair-backed accounts created via `wallet account new`) can sign transactions. PDAs (Program Derived Addresses) are derived from seeds and have no associated private key, so they cannot produce signatures. The sequencer enforces this at validation time.
 
-**Symptom**: Transaction fails with "invalid signer" even though the account exists.
+**Symptoms:**
+- Transaction rejected at sequencer with a signature validation error
+- Or, more confusingly, the instruction appears to execute but the signer constraint is silently bypassed, leading to authorization bugs
 
-**Cause**: You're trying to use a PDA-derived account as a signer.
-
-**Fix**: Use a genesis account as the signer. PDAs are for state, not signing.
-
-```rust
-// ❌ Wrong — PDA can't sign
-#[account(signer, pda = account("user"))] user_pda: AccountWithMetadata<UserState>
-
-// ✅ Correct — genesis account signs, PDA is the state
-#[account(signer)] user: AccountWithMetadata<()>,
-#[account(mut, pda = account("user"))] user_state: AccountWithMetadata<UserState>,
-```
-
-> **🔄 Coming from Solidity?** In Solidity, `msg.sender` is always an EOA or contract. In LEZ, only genesis accounts can be `msg.sender` equivalents. PDAs are state containers, not actors.
-
----
-
-### 2. borsh_derive Doesn't Compile for riscv32im
-
-> **⚠️ Warning:** The `borsh_derive` crate DOES NOT compile for the `riscv32im` RISC Zero guest target. Using `borsh_derive` as a separate dependency will cause cryptic compilation errors.
-
-**Symptom**: Build fails with errors referencing proc-macro compilation for riscv32im.
-
-**Cause**: `borsh_derive` uses proc-macros that don't cross-compile to the guest target.
-
-**Fix**: Use `borsh = { version = "1", features = ["derive"] }` — this uses borsh's own built-in derive, which works correctly.
-
-```toml
-# ❌ Wrong
-[dependencies]
-borsh = "1"
-borsh_derive = "1"   # <-- this will break the guest build
-
-# ✅ Correct
-[dependencies]
-borsh = { version = "1", features = ["derive"] }
-```
-
----
-
-### 3. lez-cli pda Bug with Typed Seeds
-
-> **⚠️ Warning:** `lez-cli pda` gives WRONG addresses when seeds contain `u64` or `u128` typed arguments. The CLI's serialization doesn't match the on-chain SHA-256 derivation.
-
-**Symptom**: The PDA address printed by `lez-cli pda` doesn't match the actual on-chain address.
-
-**Cause**: Type encoding mismatch between the CLI and the SPEL macro for numeric seed types.
-
-**Fix**: For numeric seeds, compute PDAs manually or derive them from transaction results. Literal and account seeds work correctly.
-
-```bash
-# ❌ Don't rely on this for numeric seeds
-lez-cli pda --program <id> --seeds tile 10 20
-
-# ✅ Instead: read the account address from the transaction receipt
-# or compute SHA256(program_id || "tile" || x_le_bytes || y_le_bytes) manually
-```
-
----
-
-### 4. RocksDB Stale State
-
-> **⚠️ Warning:** When you upgrade or switch between lssa versions, the old RocksDB state database persists. This causes failures that look like network or program errors but are actually state corruption.
-
-**Symptom**: Sequencer starts but fails on seemingly valid transactions; account states look wrong.
-
-**Cause**: The RocksDB schema changed between lssa versions.
-
-**Fix**:
-
-```bash
-# Find the rocksdb directory (default location) and wipe it
-rm -rf ~/.lssa/db
-
-# Restart sequencer fresh
-sequencer_runner --port 3040
-```
-
-> **💡 Tip:** Any time you see "this worked yesterday and I changed nothing," suspect stale RocksDB state. Wiping the DB is always safe in local development — you'll just lose any test state you haven't checkpointed.
-
----
-
-### 5. lssa Version Pinning
-
-> **⚠️ Warning:** lez-cli pins to a specific lssa revision for RPC compatibility. Using the wrong lssa version causes subtle failures, not obvious error messages.
-
-**Symptom**: Transactions seem to submit but never appear; RPC calls fail with cryptic errors.
-
-**Cause**: lssa rev `767b5af` has a broken commitment RPC. Other version mismatches cause similar issues.
-
-**Fix**: Use the `main` branch of lssa. Check lez-cli's source for the pinned rev it expects, and use that.
-
-```bash
-# Check what rev lez-cli expects
-grep -r "lssa" spel/lez-cli/Cargo.toml
-```
-
----
-
-### 6. init Implies mut
-
-> **⚠️ Warning:** `#[account(init)]` already implies mutability. Don't write `#[account(init, mut)]` — this is redundant at best and may cause macro errors.
-
-**Fix**: Use `#[account(init)]` alone.
+**Fix:** Always pass genesis accounts (wallet keypair accounts) where `#[account(signer)]` is expected. Never pass a PDA as a signer. If your design requires a PDA to "authorize" something, restructure: have the genesis account sign and validate ownership through a PDA seed relationship instead.
 
 ```rust
-// ❌ Wrong
-#[account(init, mut)] new_account: AccountWithMetadata<MyState>
+// ✅ Correct: genesis account signs
+#[instruction]
+pub fn transfer(
+    authority: AccountWithMetadata,  // #[account(signer)] — must be genesis
+    vault: AccountWithMetadata,      // PDA — does NOT sign
+    amount: u64,
+) -> LezResult { ... }
+```
+
+> **⚠️ Warning:** The sequencer may not always produce a clear error message when a PDA is passed as a signer. If you see commitment mismatch or authorization errors with no obvious cause, check that your signer account is a genesis account.
+
+> **🔄 Coming from Solidity?** This is similar to the distinction between an EOA (Externally Owned Account) and a contract: contracts cannot sign EIP-712 messages directly (without ERC-1271). PDAs are the LEZ equivalent of contract accounts — they can hold state and be owned by a program, but cannot produce keypair signatures.
+
+---
+
+## 2. `borsh_derive` Does Not Compile for `riscv32im`
+
+**Explanation:** The `borsh_derive` crate provides procedural macros (`#[derive(BorshSerialize, BorshDeserialize)]`). Proc-macros run on the host compiler, but when building the RISC Zero guest binary for the `riscv32im-risc0-zkvm-elf` target, the build system attempts to compile proc-macro dependencies for the guest target — which has no `proc_macro` support.
+
+**Symptoms:**
+```
+error[E0463]: can't find crate for `proc_macro`
+  --> ~/.cargo/registry/src/.../borsh-derive-1.x.x/src/lib.rs:1:1
+```
+The build fails entirely. This error often appears deep in a dependency chain, making it hard to trace back to your code.
+
+**Fix:** Do not use `#[derive(BorshSerialize, BorshDeserialize)]` in guest code. Instead, implement borsh serialization manually:
+
+```rust
+// ❌ Broken in guest: proc-macro won't compile
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct MyState {
+    pub value: u64,
+    pub owner: [u8; 32],
+}
+
+// ✅ Correct: manual impl
+impl BorshSerialize for MyState {
+    fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
+        self.value.serialize(writer)?;
+        self.owner.serialize(writer)?;
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for MyState {
+    fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        Ok(Self {
+            value: BorshDeserialize::deserialize_reader(reader)?,
+            owner: BorshDeserialize::deserialize_reader(reader)?,
+        })
+    }
+}
+```
+
+> **💡 Tip:** Put your state struct definitions in a shared `types` crate compiled separately for host and guest. The guest crate imports the types but only with manual borsh impls; the host crate can use derive macros freely.
+
+> **⚠️ Warning:** This also applies to any other proc-macro crates you might pull in transitively (`serde_derive`, `thiserror`, etc.). Audit your guest `Cargo.toml` for proc-macro dependencies before debugging build failures. Run `cargo tree --target riscv32im-risc0-zkvm-elf` to inspect the dependency graph.
+
+---
+
+## 3. `lez-cli pda` Gives Wrong Addresses for u64/u128 Seeds
+
+**Explanation:** The `lez-cli pda` command has a known bug where integer seeds (u64, u128) are not serialized correctly when computing PDA addresses. The CLI produces an address that does not match what the sequencer assigns during an `init` call. String seeds work correctly.
+
+**Symptoms:**
+- PDA address from `lez-cli pda` doesn't match the address shown in sequencer logs after initialization
+- Subsequent calls using the CLI-derived address fail with `InvalidAccountOwner` or account-not-found errors
+- Everything looks right on the client side but the sequencer rejects the account
+
+**Fix:** For programs that use integer seeds, get the canonical PDA address from the sequencer logs during the first successful `init` call, not from `lez-cli pda`:
+
+```bash
+# Initialize and capture the assigned PDA address from sequencer output
+make cli ARGS="initialize --authority-account <genesis-addr>"
+# Look in sequencer logs for: "Created account: <pda-addr>"
+# Use that address for all subsequent calls
+```
+
+If you need to compute PDA addresses programmatically (e.g., in a client), implement the seed hashing logic directly using the same algorithm as the sequencer, rather than relying on the CLI.
+
+> **💡 Tip:** String seeds are a reliable workaround. If your seed is an integer `user_id: u64`, consider encoding it as a decimal string: `format!("user:{}", user_id)`.
+
+> **⚠️ Warning:** This is a CLI-only bug. The on-chain PDA derivation is correct. Do not change your program logic — only change how you compute the address on the client side.
+
+---
+
+## 4. RocksDB Stale State Persists Across `lssa` Restarts
+
+**Explanation:** `lssa` uses RocksDB as its persistent state store. When you restart `lssa` — especially when switching between versions or after a crash — the old database state is still on disk. If the new `lssa` version has a different state schema, or if you want a clean slate for testing, stale RocksDB state causes subtle failures.
+
+**Symptoms:**
+- `lssa` starts without error but RPC calls return unexpected results
+- Commitment queries return data that should have been cleared
+- "Commitment mismatch" errors on the first transaction after restart
+- Errors that look like valid RPC responses but with wrong content (correct JSON shape, wrong values)
+
+**Fix:** Delete the RocksDB directory before restarting `lssa`:
+
+```bash
+# Stop lssa first, then:
+rm -rf rocksdb/
+
+# Or, if using a custom path configured in your sequencer config:
+rm -rf /path/to/lssa/data/rocksdb/
+
+# Then restart
+./sequencer_runner --config sequencer_runner/configs/debug/
+```
+
+> **⚠️ Warning:** This deletes all sequencer state, including all accounts and commitments. On devnet this is fine. On any environment with real state, take a backup first.
+
+> **💡 Tip:** Automate this in your dev workflow. A `make reset` target that stops `lssa`, removes RocksDB, and restarts fresh will save hours of debugging. Keep it separate from `make clean` so it isn't run accidentally.
+
+---
+
+## 5. `lssa` Revision `767b5af` Has Broken Commitment RPC
+
+**Explanation:** A specific commit of `lssa` (`767b5af`) introduced a regression where commitment queries via the RPC API return empty results regardless of actual stored state. The program logic and sequencing still work, but anything that queries commitments (wallet scanning, client-side state reads) returns nothing.
+
+**Symptoms:**
+- `wallet account inspect <pda-addr>` shows no data even after successful transactions
+- `wallet account sync-private` finds no commitments
+- Client calls that read account state return empty or zeroed data
+- No errors are reported — responses are well-formed but empty
+
+**Fix:** Use the `main` branch of `lssa` rather than pinning to `767b5af`. If you need to pin a version for reproducibility, pin to a commit after this regression was fixed:
+
+```bash
+# In your lssa build/install process, use main or a known-good commit
+git clone <lssa-repo>
+git checkout main   # not 767b5af
+cargo build --release
+```
+
+> **⚠️ Warning:** This bug is particularly insidious because it looks like a client-side issue (your wallet or client code can't read state) when the problem is the sequencer's RPC layer. If wallet scanning finds nothing after confirmed transactions, suspect this first.
+
+---
+
+## 6. `init` Implies `mut` — Don't Combine Them
+
+**Explanation:** In LEZ's account constraint system, `#[account(init)]` already implies that the account will be created and written — it is implicitly mutable. Adding `mut` alongside `init` is redundant and can cause constraint conflicts or unexpected behavior.
+
+**Symptoms:**
+- Macro expansion errors or constraint validation failures at compile time
+- Runtime errors about conflicting account constraints
+- Confusing error messages that reference the account declaration line
+
+**Fix:** Use only `init` without `mut`:
+
+```rust
+// ❌ Redundant and potentially broken
+#[account(init, mut, seeds = [b"state", authority.key().as_ref()])]
+pub state: AccountWithMetadata,
 
 // ✅ Correct
-#[account(init)] new_account: AccountWithMetadata<MyState>
+#[account(init, seeds = [b"state", authority.key().as_ref()])]
+pub state: AccountWithMetadata,
 ```
+
+> **💡 Tip:** Only use `mut` on accounts that already exist and are being modified. Use `init` only for accounts being created for the first time. The two are mutually exclusive from a semantic standpoint.
 
 ---
 
-### 7. All Accounts Must Be in post_states
+## 7. ALL Accounts Must Be Returned in `post_states`
 
-> **⚠️ Warning:** Every account passed to your instruction MUST be returned in `post_states`, even if you didn't modify it. Omitting an account doesn't preserve its state — it's treated as if it was deleted.
+**Explanation:** The LEZ sequencer performs account balancing: the number of accounts returned in `LezOutput` must exactly match the number of accounts passed in. Even accounts you did not read from or modify must be included in `post_states`. The sequencer does not infer which accounts were touched.
 
-**Symptom**: Account balance or data "disappears" after calling an instruction.
+**Symptoms:**
+```
+Error: account count mismatch: expected 3, got 2
+```
+- Transaction is rejected at the sequencer
+- The error clearly states a count mismatch, but it's easy to miss which account was dropped
 
-**Cause**: The account was passed in but not returned in `post_states`.
-
-**Fix**: Always collect all input accounts into your return vec:
+**Fix:** Return every received account in `post_states`, even untouched ones:
 
 ```rust
-// Safe pattern: collect all accounts, modify as needed
-let mut post_states = vec![];
-post_states.push(AccountPostState::new(counter.with_data(new_state)));
-post_states.push(AccountPostState::new(authority)); // don't forget!
-Ok(LezOutput::states_only(post_states))
+#[instruction]
+pub fn update_score(
+    player: AccountWithMetadata,        // modified
+    config: AccountWithMetadata,        // read-only, NOT modified
+    leaderboard: AccountWithMetadata,   // modified
+    new_score: u64,
+) -> LezResult {
+    let player_data = PlayerAccount::try_from_slice(&player.data)?;
+    let config_data = ConfigAccount::try_from_slice(&config.data)?;
+    let leaderboard_data = LeaderboardAccount::try_from_slice(&leaderboard.data)?;
+
+    // ... logic ...
+
+    // ✅ Must include all three, even config which wasn't modified
+    Ok(LezOutput::states_only(vec![
+        player.into_post_state(updated_player_data.try_to_vec()?),
+        config.into_post_state(config_data.try_to_vec()?),   // unchanged — still required
+        leaderboard.into_post_state(updated_leaderboard.try_to_vec()?),
+    ]))
+}
 ```
 
-> **🔄 Coming from Solidity?** In Solidity, you modify storage in-place and don't return anything. In LEZ, your instruction is a pure function: the sequencer replaces account states with exactly what you return. If you don't return an account, it's gone.
+> **⚠️ Warning:** If you use rest accounts (variadic), every account in that list must also be returned. This is a common source of off-by-one errors when the rest list length varies per call.
+
+> **💡 Tip:** Write a helper wrapper that tracks whether an account was modified and always emits all accounts, using original data for unmodified ones. This makes it impossible to accidentally omit an account.
 
 ---
 
-### 8. Account Ordering in Function Signatures
+## 8. Accounts Come Before Args in Function Signatures
 
-> **⚠️ Warning:** Accounts MUST come before scalar arguments in instruction function signatures. Mixing them causes macro compilation errors.
+**Explanation:** The `#[instruction]` macro parses function signatures with a strict ordering requirement: all `AccountWithMetadata` parameters must come first, followed by all scalar/primitive arguments. Mixing the order causes a macro expansion error that often points at the wrong line.
+
+**Symptoms:**
+```
+error: expected AccountWithMetadata, found u64
+  --> src/lib.rs:42:5
+   |
+42 |     amount: u64,
+   |     ^^^^^^^^^^^
+```
+The error points at the scalar arg, not the structural mistake.
+
+**Fix:** Always put all accounts first, then all args:
 
 ```rust
-// ❌ Wrong — scalar arg mixed in before all accounts
-pub fn my_instruction(
-    #[account(signer)] user: AccountWithMetadata<()>,
-    value: u64,                                          // <-- too early
-    #[account(mut)] state: AccountWithMetadata<MyState>,
-) -> ...
+// ❌ Broken: arg before account — breaks macro
+#[instruction]
+pub fn deposit(
+    amount: u64,
+    vault: AccountWithMetadata,
+    depositor: AccountWithMetadata,
+) -> LezResult { ... }
 
-// ✅ Correct — all accounts first, then scalars
-pub fn my_instruction(
-    #[account(signer)] user: AccountWithMetadata<()>,
-    #[account(mut)] state: AccountWithMetadata<MyState>,
-    value: u64,
-) -> ...
+// ✅ Correct: accounts first, args after
+#[instruction]
+pub fn deposit(
+    vault: AccountWithMetadata,
+    depositor: AccountWithMetadata,
+    amount: u64,
+) -> LezResult { ... }
 ```
+
+> **💡 Tip:** Adopt a consistent convention within each instruction: signer accounts first, then read-only accounts, then writable non-signer accounts, then scalar args. This is easy to read and avoids the ordering error.
 
 ---
 
-### 9. OOM During Build
+## 9. Use `--cores 2 --max-jobs 2` to Avoid OOM During Proof Generation
 
-> **⚠️ Warning:** RISC Zero guest compilation uses a lot of memory. On machines with less than 8 GB RAM or in constrained containers, the build will silently OOM and produce corrupted binaries or just fail.
+**Explanation:** RISC Zero proof generation is extremely memory-intensive. By default, the prover uses all available CPU cores and launches multiple parallel proof jobs, easily exhausting RAM on a typical developer machine. When memory runs out, the OS OOM killer silently terminates the prover process and the CLI appears to hang indefinitely.
 
-**Fix**:
+**Symptoms:**
+- `lez-cli` or `make proof` hangs for many minutes with no output
+- System becomes unresponsive or starts swapping heavily
+- No error message — the CLI stops making progress
+- `dmesg | grep oom` shows OOM kill events
+
+**Fix:** Limit parallelism during proof generation:
 
 ```bash
-cargo build --release --jobs 2
-# or in Makefile:
-CARGO_BUILD_JOBS=2 cargo build --release
+# Explicit flags
+lez-cli prove --cores 2 --max-jobs 2
+
+# Or via environment variables (verify names for your lez-cli version)
+RISC0_PROVER_CORES=2 RISC0_MAX_JOBS=2 make proof
 ```
 
-Limiting parallelism keeps peak memory manageable. Two jobs is a safe default for CI environments with 4 GB RAM.
+> **⚠️ Warning:** On a machine with 8 GB RAM, a single proof job can consume 4–6 GB. Two jobs may push you to the limit. If you still OOM, try `--cores 1 --max-jobs 1`.
+
+> **💡 Tip:** For CI environments, set these flags globally in your CI config. Proof generation on runners with 4 GB RAM requires `--max-jobs 1`. Consider using a dedicated larger runner for proof generation jobs.
 
 ---
 
-### 10. Rest Account CLI Flag
+## 10. Rest Account Flag Is `--{name}` Not `--{name}-account`
 
-> **⚠️ Warning:** When calling instructions with `Vec<AccountWithMetadata<T>>` (rest accounts), the CLI flag is `--<name>` (e.g., `--tiles`), NOT `--<name>-account`. Check your IDL to see the exact flag name.
+**Explanation:** In `lez-cli`, regular single accounts use `--{name}-account <addr>`. However, variadic "rest" accounts use a different flag format: `--{name}` (no `-account` suffix), and accept a comma-separated list of addresses.
+
+**Symptoms:**
+- `lez-cli` errors with: `unexpected argument '--players-account'`
+- Or the argument is silently accepted but only the first address is used
+- Account count mismatch at the sequencer because rest accounts weren't passed correctly
+
+**Fix:**
 
 ```bash
-# ❌ Wrong
-lez-cli call --instruction batch_update --tiles-account <addr>
+# ❌ Wrong: -account suffix for rest accounts
+lez-cli call --idl program.json --instruction update_scores \
+  --players-account addr1,addr2,addr3
 
-# ✅ Correct (check your IDL for the actual field name)
-lez-cli call --instruction batch_update --tiles <addr>
+# ✅ Correct: no -account suffix, comma-separated list
+lez-cli call --idl program.json --instruction update_scores \
+  --players addr1,addr2,addr3
+
+# Regular single accounts still use -account:
+lez-cli call --idl program.json --instruction initialize \
+  --authority-account <genesis-addr> \
+  --config-account <pda-addr>
 ```
+
+> **💡 Tip:** Check your IDL JSON to identify which parameters are rest accounts. They appear with a different type annotation (typically `rest` or `variadic`) compared to regular accounts.
 
 ---
 
-### 11. Scaffold Missing risc0 Metadata
+## 11. `lez-cli init` Scaffold Missing RISC Zero Metadata in `methods/Cargo.toml`
 
-> **⚠️ Warning:** `lez-cli init` scaffold may be missing `risc0-zkvm` metadata in `methods/Cargo.toml`. This causes build failures when the zkVM tries to locate guest binary metadata.
+**Explanation:** The `lez-cli init <name>` scaffold generates a workspace, but the generated `methods/Cargo.toml` omits the `[[package.metadata.risc0.methods]]` section that tells the RISC Zero build system which guest binaries to compile. Without this section, `cargo build` succeeds but does not produce the correct guest ELF binary.
 
-**Fix**: Manually add the required risc0 metadata to `methods/Cargo.toml`:
+**Symptoms:**
+- `cargo build` succeeds with no errors
+- `lez-cli inspect` fails: cannot find guest binary
+- The `target/riscv-guest/` directory is empty or missing expected ELF files
+- Build log shows no RISC Zero guest compilation step
+
+**Fix:** Add the metadata section to `methods/Cargo.toml` manually:
 
 ```toml
-[package.metadata.risc0]
-methods = ["guest"]
+# methods/Cargo.toml
+
+[package]
+name = "methods"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# ... your deps ...
+
+# ✅ Add this section — it is missing from the scaffold
+[[package.metadata.risc0.methods]]
+name = "MY_PROGRAM"      # matches the constant name generated in build.rs
+guest_path = "guest"     # path to the guest crate relative to methods/
 ```
 
-Without this, `build.rs` in the methods crate cannot locate the guest binary and the build silently produces no ELF file.
+> **⚠️ Warning:** The `name` field must match what your build scripts expect. Check how `make build` or `build.rs` references the guest binary name to confirm the correct value.
+
+> **💡 Tip:** After fixing this, run `cargo clean` in the `methods/` directory and rebuild from scratch to avoid stale artifact confusion.
 
 ---
 
-### 12. Determinism Violations
+## 12. `sequencer_runner` Takes a Directory Path, Not a File Path
 
-> **⚠️ Warning:** Everything in your program must be deterministic. The ZK proof system requires that re-executing the guest binary with the same inputs always produces the same output. Any non-determinism invalidates the proof.
+**Explanation:** The `sequencer_runner` binary expects a path to a configuration *directory*, not a path to the JSON config file itself. Passing the file path directly causes a startup error or silently uses default configuration.
 
-Non-deterministic operations that will break your program:
+**Symptoms:**
+- `sequencer_runner` exits immediately with a config parse error
+- Or `sequencer_runner` starts but uses unexpected default settings (wrong port, wrong RocksDB path)
+- Config changes have no effect because the file is not being read
 
-- `std::time::SystemTime::now()` — wall clock time
-- `rand::random()` — non-seeded random numbers
-- HashMap iteration order (use BTreeMap instead)
-- Floating-point operations (results can differ between hardware)
-
-```rust
-// ❌ Wrong — non-deterministic
-let now = std::time::SystemTime::now();
-
-// ✅ Correct — use a block timestamp from your program inputs
-// (pass it in as an argument or read from a known account)
-let timestamp: u64 = clock_account.data().timestamp;
-```
-
----
-
-### 13. Private Account Scan Required After Receive
-
-> **⚠️ Warning:** Private accounts sent to you are NOT automatically visible in your wallet. You must run `wallet account sync-private` to scan the chain and decrypt incoming private transactions.
-
-**Symptom**: Someone sent you tokens or a private message but your wallet shows nothing.
-
-**Fix**:
+**Fix:**
 
 ```bash
-wallet account sync-private
+# ❌ Wrong: path to the JSON file
+./sequencer_runner --config sequencer_runner/configs/debug/config.json
+
+# ✅ Correct: path to the directory containing the config file
+./sequencer_runner --config sequencer_runner/configs/debug/
 ```
 
-This scans recent blocks for commitments whose view tags match your vpk, decrypts them using your nsk, and adds them to your local wallet.
+> **💡 Tip:** `sequencer_runner` looks for a specific filename inside the directory (e.g., `config.json` or `debug.json`). Verify which filename it expects by checking the `sequencer_runner` source or documentation for your version.
+
+---
+
+## 13. Clean `target/riscv-guest/` After Dependency Changes
+
+**Explanation:** RISC Zero maintains a separate build target directory for guest binaries (`target/riscv-guest/`). When you change dependencies in the guest crate, Cargo may not detect all stale artifacts in this directory, leading to linker errors or silently running an outdated binary.
+
+**Symptoms:**
+- Link errors after adding or removing guest dependencies: `undefined reference to ...`
+- Program behaves as if an old version is running despite successful rebuild
+- `make build` succeeds but `lez-cli inspect` shows an outdated ImageID
+- Errors referencing symbols that should no longer exist
+
+**Fix:**
+
+```bash
+# Clear guest target artifacts before rebuilding after dependency changes
+rm -rf target/riscv-guest/
+
+# Then rebuild
+make build
+# or
+cargo build --release
+```
+
+> **⚠️ Warning:** Never copy the `target/riscv-guest/` directory between projects. Each project's guest target is specific to its dependency tree and build configuration. Copying it causes subtle binary corruption that is very hard to diagnose.
+
+> **💡 Tip:** Add `rm -rf target/riscv-guest/` to your `make clean` target so it always runs as part of a full clean. You can also add it as a pre-build step when you know dependencies changed.
+
+---
+
+## General Troubleshooting Reference
+
+Use this table to quickly map symptoms to causes and fixes.
+
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| `can't find crate for 'proc_macro'` | `borsh_derive` or other proc-macro in guest | Remove proc-macro crates from guest; use manual borsh impls |
+| CLI hangs during proof generation | OOM on constrained host | Add `--cores 2 --max-jobs 2` |
+| Account count mismatch at sequencer | Missing accounts in `post_states` | Return all received accounts, including unmodified ones |
+| PDA address from CLI doesn't match sequencer | `lez-cli pda` bug with integer seeds | Get address from sequencer logs on first `init` call |
+| Commitment queries return empty results | `lssa` on broken revision `767b5af` | Switch to `main` branch |
+| Mysterious commitment mismatch after restart | Stale RocksDB state | `rm -rf rocksdb/` before restarting `lssa` |
+| Signature validation error with PDA signer | PDA passed where genesis account required | Use a genesis (keypair) account as signer |
+| `init, mut` constraint conflict | Redundant constraint combination | Use only `#[account(init)]` |
+| Macro error pointing at wrong line | Accounts and args out of order | Put all `AccountWithMetadata` params before scalar args |
+| `--players-account` flag not recognized | Wrong flag format for rest accounts | Use `--players addr1,addr2` (no `-account` suffix) |
+| Guest binary not produced by build | Missing risc0 metadata in `methods/Cargo.toml` | Add `[[package.metadata.risc0.methods]]` section |
+| `sequencer_runner` ignores config changes | Passing file path instead of directory | Pass directory path to `--config` |
+| Link errors after dependency change | Stale `target/riscv-guest/` | `rm -rf target/riscv-guest/` and rebuild |
+| Account data zeroed after successful tx | `lssa` commitment RPC bug (`767b5af`) | Upgrade `lssa` to `main` branch |
+| Signer check passes when it shouldn't | PDA silently bypasses signer constraint | Audit: ensure signer accounts are genesis accounts |
+| `DeserializationError` reading account | Wrong account type or stale data | Check account type matches struct; reset state if stale |
+| Build succeeds but no guest ELF produced | Missing risc0 metadata section | Add `[[package.metadata.risc0.methods]]` to `methods/Cargo.toml` |
+| Old program behavior after code change | Stale `riscv-guest` artifacts | `rm -rf target/riscv-guest/` and rebuild |
+
+> **💡 Tip:** When nothing on this table matches, enable verbose logging on `lssa` and run the failing operation again. The sequencer logs almost always contain the real error even when the client-side message is misleading.
+
+> **⚠️ Warning:** Many LEZ errors produce well-formed responses with wrong content rather than explicit error codes. If a call "succeeds" but behaves incorrectly, add explicit logging of account contents immediately after deserialization — don't assume the account was read correctly.

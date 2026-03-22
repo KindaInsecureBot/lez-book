@@ -1,242 +1,385 @@
 # Appendix A: CLI Reference
 
-This appendix documents the command-line tools available for LEZ development.
+This appendix documents the command-line tools available for LEZ development: `lez-cli`, `wallet`, and `lez-client-gen`. For type formats when passing arguments, see [Appendix B: Type Format Table](./type-formats.md).
 
 ---
 
 ## lez-cli
 
-The primary developer CLI for building, deploying, and interacting with LEZ programs.
+The primary developer CLI for building, inspecting, deploying, and calling LEZ programs.
 
-```
-lez-cli [OPTIONS] <SUBCOMMAND>
-```
+### Global Options
 
-**Global Options:**
+These options apply to most `lez-cli` subcommands:
 
-| Flag | Description | Default |
-|---|---|---|
-| `--rpc-url <URL>` | Sequencer RPC URL | `http://localhost:3040` |
-| `--wallet <PATH>` | Wallet directory path | `~/.lssa/wallet` |
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--idl <file>` | `-i` | Path to the IDL JSON file for the program |
+| `--program <binary>` | `-p` | Path to the compiled guest ELF binary |
+| `--program-id <id>` | | Program ID (ImageID) in hex, decimal, or ImageID format |
+| `--dry-run` | | Simulate the call without submitting to the sequencer |
 
 ---
 
-### lez-cli init
+### `lez-cli init <name>`
 
 Scaffold a new LEZ program workspace.
 
 ```bash
-lez-cli init <name>
+lez-cli init my_program
 ```
 
-Creates a `<name>/` directory with the following workspace layout:
-
+Creates a directory `my_program/` with the standard workspace structure:
 ```
-<name>/
-├── core/           # Shared types and instruction logic (native + guest)
-├── methods/        # RISC Zero guest crate
-│   ├── guest/      # Guest binary entry point
-│   └── build.rs    # Embeds guest ELF at compile time
-├── idl-gen/        # Binary to generate the IDL JSON
-├── cli-wrapper/    # Optional typed CLI wrapper
-└── Makefile        # build / idl / deploy / cli targets
+my_program/
+├── Cargo.toml          # workspace manifest
+├── Makefile            # build/deploy shortcuts
+├── methods/
+│   ├── Cargo.toml      # ⚠️ Missing risc0 metadata section — add manually
+│   └── guest/
+│       └── src/
+│           └── main.rs
+└── program/
+    └── src/
+        └── lib.rs
 ```
 
-> **⚠️ Warning:** The scaffold may be missing `risc0-zkvm` metadata in `methods/Cargo.toml`. If your build fails after `lez-cli init`, manually add:
-> ```toml
-> [package.metadata.risc0]
-> methods = ["guest"]
-> ```
+> **⚠️ Warning:** The scaffold's `methods/Cargo.toml` is missing the `[[package.metadata.risc0.methods]]` section. Add it before building or the guest binary will not be produced. See [Gotchas #11](../part5/gotchas.md#11-lez-cli-init-scaffold-missing-risc-zero-metadata-in-methodscargotoml).
 
 ---
 
-### lez-cli call
+### `lez-cli build`
 
-Call an instruction on a deployed program.
+Compile the program to `riscv32im-risc0-zkvm-elf`.
 
 ```bash
-lez-cli call \
-  --idl <idl.json> \
-  --instruction <instruction-name> \
-  --<account-name> <address> \
-  [--<arg-name> <value>] \
-  [--bin-<program-name> <path>]
+lez-cli build
+# equivalent to:
+make build
 ```
 
-**Flags:**
+Produces the guest ELF in `target/riscv-guest/`. Use `make build` for Docker-based reproducible builds. Use `lez-cli build` for local builds with the `rzup` toolchain.
+
+---
+
+### `lez-cli idl`
+
+Generate the IDL (Interface Definition Language) JSON from the compiled program.
+
+```bash
+lez-cli idl
+lez-cli idl --out program.json
+lez-cli idl --out ./clients/program.json
+```
 
 | Flag | Description |
-|---|---|
-| `--idl <path>` | Path to the program's IDL JSON file |
-| `--instruction <name>` | Name of the instruction to call |
-| `--<account-name> <addr>` | Account address (one flag per account) |
-| `--<arg-name> <value>` | Argument value (one flag per arg) |
-| `--bin-<name> <path>` | Path to a program binary (for CPI programs) |
+|------|-------------|
+| `--out <file>` | Output file path (default: `program.json` in current directory) |
 
-**Example:**
+The IDL JSON describes all instructions, their account parameters, and argument types. Clients and `lez-cli` itself use this file to call the program correctly. Regenerate the IDL after any change to instruction signatures.
+
+---
+
+### `lez-cli inspect`
+
+Show the ImageID (program ID) of the compiled guest binary.
+
+```bash
+lez-cli inspect
+lez-cli inspect --program ./target/riscv-guest/my_program.elf
+lez-cli inspect --program-id <id>
+```
+
+Output includes three formats:
+- **Hex**: raw 32-byte hash as a hex string
+- **Decimal**: big-endian integer
+- **ImageID**: canonical identifier used as the program ID on the sequencer
+
+Use `make inspect` as a shorthand if your Makefile is configured.
+
+> **💡 Tip:** The ImageID changes with every code change, including comments and formatting. Always run `lez-cli inspect` after a build to confirm you have the ImageID you expect before deploying.
+
+---
+
+### `lez-cli pda`
+
+Derive a PDA (Program Derived Address) from seeds and a program ID.
+
+```bash
+lez-cli pda --seeds '["my_seed", "another_seed"]' --program-id <id>
+lez-cli pda --seeds '["state"]' --program-id <id>
+```
+
+Seeds are passed as a JSON array. Supported seed types:
+- String seeds: `"my_seed"` — works correctly
+- Bytes seeds: `[1, 2, 3]` — check your version for support
+
+> **⚠️ Warning:** `lez-cli pda` produces incorrect addresses for `u64` and `u128` integer seeds. For programs with integer seeds, derive the address from sequencer logs during the first `init` call instead. See [Gotchas #3](../part5/gotchas.md#3-lez-cli-pda-gives-wrong-addresses-for-u64u128-seeds).
+
+> **💡 Tip:** String seeds are always safe. Encode integer seeds as strings (`format!("user:{}", user_id)`) to avoid this bug.
+
+---
+
+### `lez-cli deploy`
+
+Register the program's ImageID with the sequencer, making it callable.
+
+```bash
+lez-cli deploy
+lez-cli deploy --program ./target/riscv-guest/my_program.elf
+make deploy
+```
+
+Run this after `make setup` (which creates the program account). Deploying an already-deployed program is idempotent.
+
+---
+
+### Calling Instructions
+
+Call a specific instruction on a deployed program.
 
 ```bash
 lez-cli call \
-  --idl ./counter.json \
-  --instruction increment \
-  --counter 4vKn7pW8XzR2mQ9aBcDe1F \
-  --authority 7hJkLmN3pQ5rSt6uVwXy8Z \
-  --amount 5
+  --idl program.json \
+  --instruction <instruction_name> \
+  --<account_name>-account <address> \
+  [--<arg_name> <value> ...]
 ```
 
-> **💡 Tip:** Account and argument flag names come directly from your instruction's parameter names. Check your IDL JSON for the exact names if you're unsure.
+**Account flags:**
+- Regular accounts: `--{name}-account <addr>` — one address per flag
+- Rest (variadic) accounts: `--{name} <addr1,addr2,...>` — comma-separated, no `-account` suffix
+
+**Argument flags:**
+- `--<arg_name> <value>` for each scalar argument
+- See [Appendix B](./type-formats.md) for how to format each type
+
+**Examples:**
+
+```bash
+# Initialize with a single signer account
+lez-cli call \
+  --idl program.json \
+  --instruction initialize \
+  --authority-account 5Kg8cfY8iAiFEBzQPiTVPDLDTvBpMfQ6VFyiKNfJNQ3
+
+# Deposit with two accounts and a u64 argument
+lez-cli call \
+  --idl program.json \
+  --instruction deposit \
+  --vault-account <vault-addr> \
+  --depositor-account <depositor-addr> \
+  --amount 1000000
+
+# Batch update with rest accounts (variadic)
+lez-cli call \
+  --idl program.json \
+  --instruction batch_update \
+  --authority-account <auth-addr> \
+  --targets addr1,addr2,addr3 \
+  --value 42
+```
+
+**Makefile shorthand:**
+
+Most projects configure a `make cli` target:
+
+```bash
+make cli ARGS="initialize --authority-account <genesis-addr>"
+make cli ARGS="deposit --vault-account <vault> --depositor-account <dep> --amount 1000000"
+```
 
 ---
 
-### lez-cli deploy
+### `--bin-<NAME>` Flag (CPI)
 
-Deploy a program binary to the sequencer. Returns the program's ImageID.
-
-```bash
-lez-cli deploy \
-  --program-binary <path-to-elf> \
-  --idl <path-to-idl.json>
-```
-
-The ImageID printed by this command is your program's on-chain identifier. Save it — you'll need it for PDA derivation, CPI calls, and client configuration.
-
----
-
-### lez-cli account
-
-Read and list account state.
+When calling an instruction that performs CPI (Cross-Program Invocation), pass the dependency program binary so `lez-cli` can include it in the call context:
 
 ```bash
-lez-cli account get <address>    # read account state
-lez-cli account list             # list known accounts
+lez-cli call \
+  --idl program.json \
+  --instruction cpi_instruction \
+  --bin-token_program ./deps/token_program.elf \
+  --authority-account <addr>
 ```
 
-**account get** — fetches and displays the raw account state at the given address. Output is the borsh-decoded data if a matching IDL type is found, otherwise raw hex.
-
-**account list** — lists all accounts the CLI knows about (from the wallet or config).
-
----
-
-### lez-cli pda
-
-Compute a PDA address from seeds.
-
-```bash
-lez-cli pda \
-  --program <program-id> \
-  --seeds <seed1> <seed2> ...
-```
-
-> **⚠️ Warning:** `lez-cli pda` gives WRONG addresses when seeds contain `u64` or `u128` typed arguments. The CLI's serialization does not match the on-chain SHA-256 derivation for numeric types. Literal string seeds and account address seeds work correctly. See the Gotchas chapter for a workaround.
-
----
-
-## lez-client-gen
-
-Reads an IDL file and generates typed client code for interacting with a LEZ program.
-
-```
-lez-client-gen [OPTIONS]
-```
-
-**Options:**
-
-| Flag | Description | Default |
-|---|---|---|
-| `--idl <path>` | IDL JSON file to read | — |
-| `--out-dir <path>` | Output directory for generated code | `./generated` |
-| `--target <rust\|c>` | Code generation target | `rust` |
-
-**Example:**
-
-```bash
-lez-client-gen \
-  --idl ./counter.json \
-  --out-dir ./client/src/generated \
-  --target rust
-```
-
-The generated Rust code provides typed structs and async functions matching each instruction. Regenerate whenever the IDL changes.
-
-> **⚠️ Warning:** Never edit generated files by hand. They will be overwritten the next time `lez-client-gen` runs. Put customization in wrapper code that imports the generated types.
+The `NAME` must match the program name as declared in the calling program's CPI invocation.
 
 ---
 
 ## wallet
 
-The wallet CLI manages genesis accounts and private transfers.
+The `wallet` CLI manages genesis accounts, private account scanning, and balance transfers. The wallet communicates with `lssa` via RPC.
 
+### Environment Variable
+
+```bash
+export NSSA_WALLET_HOME_DIR=/path/to/wallet/config
 ```
-wallet [OPTIONS] <SUBCOMMAND>
-```
+
+Set this to a persistent directory. All wallet state (keys, account metadata) is stored here. If you lose this directory without a backup, you lose access to the private keys stored in it.
 
 ---
 
-### wallet init
+### `wallet init`
 
-Initialize a new wallet at the default location (`~/.lssa/wallet`).
+Initialize the wallet configuration directory.
 
 ```bash
 wallet init
+NSSA_WALLET_HOME_DIR=/my/wallet wallet init
 ```
+
+Creates the config directory and generates the initial key material. Run this once per wallet instance.
 
 ---
 
-### wallet account
+### `wallet account new`
 
-Manage genesis and private accounts.
+Create a new genesis account.
 
 ```bash
-wallet account new                   # create a new genesis account
-wallet account new private           # create a new private account
-wallet account list                  # list all known accounts
-wallet account sync-private          # scan chain for incoming private txs
+wallet account new
+wallet account new private    # create a private (shielded) account
 ```
 
-**account new** — generates a new keypair and registers it as a genesis account with the sequencer.
+Genesis accounts are keypair-backed. The `private` variant creates a shielded account with a commitment-based identity. Both types return an account ID after creation.
 
-**account new private** — generates a new account with an associated nsk/npk for privacy.
-
-**account list** — prints all known accounts with their addresses, balances, and types.
-
-**account sync-private** — scans recent blocks for private commitments whose view tags match your vpk. Decrypts matching commitments using your nsk and adds them to the local wallet. Run this whenever you're expecting to have received private funds or messages.
+> **💡 Tip:** The `nsk` (Nullifier Spending Key) is the root secret for all private accounts. Back it up immediately. See [Deployment: Key Management](../part5/deployment.md#key-management).
 
 ---
 
-### wallet auth-transfer
+### `wallet account list`
 
-Send and receive private (authenticated) transfers.
+List all accounts managed by this wallet.
 
 ```bash
-wallet auth-transfer init \
-  --program <program-id> \
-  --account <genesis-addr>
+wallet account list
+```
 
+Output includes account IDs, types (genesis/private), and balances if applicable.
+
+---
+
+### `wallet account inspect <id>`
+
+Show detailed information about a specific account.
+
+```bash
+wallet account inspect 5Kg8cfY8iAiFEBzQPiTVPDLDTvBpMfQ6VFyiKNfJNQ3
+wallet account inspect <pda-addr>
+```
+
+Displays account data, owner program ID, and balance. Useful for verifying state after calling an instruction. If this returns empty data for an account that should have been initialized, see [Gotchas #4](../part5/gotchas.md#4-rocksdb-stale-state-persists-across-lssa-restarts) and [Gotchas #5](../part5/gotchas.md#5-lssa-revision-767b5af-has-broken-commitment-rpc).
+
+---
+
+### `wallet account sync-private`
+
+Scan the commitment tree for private account updates addressed to this wallet.
+
+```bash
+wallet account sync-private
+```
+
+This scans new commitments using the wallet's viewing keys and decrypts any that belong to this wallet. Use this to find incoming private transfers or check private account balances.
+
+> **💡 Tip:** Private account scanning uses view tags to skip 99.6% of commitments. Even so, scanning may take time on a sequencer with many commitments. Run this after any expected incoming transfer.
+
+---
+
+### `wallet auth-transfer init`
+
+Initialize the transfer authentication module for a private account. Required before sending private transfers.
+
+```bash
+wallet auth-transfer init --account-id <private-account-id>
+```
+
+This must be run once per private account before that account can send outgoing transfers.
+
+---
+
+### `wallet auth-transfer send`
+
+Send a private token transfer between accounts.
+
+```bash
 wallet auth-transfer send \
-  --to <recipient-npk> \
-  --amount <value> \
-  --program <program-id>
+  --from <sender-account-id> \
+  --to <recipient-account-id> \
+  --amount <amount>
 ```
 
-**auth-transfer init** — initializes a private program account, linking a genesis account to the privacy system.
-
-**auth-transfer send** — sends a private transfer to a recipient identified by their npk. The sequencer sees only a commitment; the transfer amount and recipient identity are hidden.
+The transfer is posted to the sequencer as a shielded transaction. The recipient must run `wallet account sync-private` to detect and claim it.
 
 ---
 
-## sequencer_runner
+### `wallet check-health`
 
-The local sequencer for development. Not typically invoked directly in production — check the lssa repository for production deployment docs.
+Verify connectivity to the sequencer.
 
 ```bash
-sequencer_runner --port 3040
+wallet check-health
 ```
 
-**Options:**
+Useful for diagnosing connection issues before attempting transactions.
 
-| Flag | Description | Default |
-|---|---|---|
-| `--port <port>` | RPC listen port | `3040` |
-| `--db-path <path>` | RocksDB state directory | `~/.lssa/db` |
+---
 
-> **⚠️ Warning:** When upgrading lssa versions, delete the RocksDB directory before restarting (`rm -rf ~/.lssa/db`). Stale state from a previous schema causes confusing errors. See the Gotchas chapter.
+## lez-client-gen
+
+`lez-client-gen` generates typed client code from a LEZ program IDL. Use it to produce safe, ergonomic client bindings instead of calling `lez-cli` directly from application code.
+
+### Basic Usage
+
+```bash
+lez-client-gen \
+  --idl program.json \
+  --out-dir ./generated/
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--idl <file>` | Path to the IDL JSON file (required) |
+| `--out-dir <dir>` | Output directory for generated files (required) |
+| `--emit-header` | Emit a C header file alongside the Rust bindings |
+| `--no-ffi` | Skip generating FFI-compatible types (pure Rust output only) |
+| `--prefix <str>` | Prefix all generated type names with `<str>` to avoid collisions |
+
+### Output
+
+`lez-client-gen` produces Rust source files in `--out-dir` containing:
+
+- Typed instruction builder structs for each instruction
+- Account argument types matching the IDL
+- Serialization/deserialization code for all argument types
+- (With `--emit-header`) A C header for use from non-Rust clients
+
+### Example
+
+```bash
+# Generate Rust client bindings
+lez-client-gen --idl program.json --out-dir ./crates/program-client/src/generated/
+
+# Generate with C header for FFI consumers
+lez-client-gen \
+  --idl program.json \
+  --out-dir ./clients/ffi/ \
+  --emit-header \
+  --prefix MyProgram
+```
+
+After generation, add the generated directory as a module in your Rust crate:
+
+```rust
+// src/lib.rs
+mod generated;
+pub use generated::*;
+```
+
+> **⚠️ Warning:** Regenerate client bindings every time the IDL changes. Stale bindings that don't match the deployed program will cause runtime deserialization errors.
+
+> **💡 Tip:** Commit generated bindings to your repository and set up CI to verify they are up-to-date with the IDL. A `make codegen && git diff --exit-code` check catches IDL drift early.
