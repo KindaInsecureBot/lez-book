@@ -2,7 +2,15 @@
 
 LEZ is a privacy-native smart contract platform where every program execution generates a zero-knowledge proof. It gives you the programmability of a smart contract system and the privacy of a ZK circuit — without requiring you to write a ZK circuit.
 
-The informal expansion is **Lollipop EVM Zero-knowledge**. Formally, LEZ is part of the **NSSA** (Nondeterministic State Sequencer Architecture) stack.
+**LEZ** stands for **Logos Execution Zone**. It is the execution layer of the **Logos Network** (logos.co) — a decentralized governance and infrastructure stack built by IFT (Institute of Free Technology). Formally, LEZ is part of the **NSSA** (Nondeterministic State Sequencer Architecture) stack.
+
+**Logos ecosystem context:**
+- **Logos Network** — decentralized governance and infrastructure stack (logos.co)
+- **IFT** — Institute of Free Technology, the organization building Logos
+- **LEZ** — the smart contract execution layer of Logos
+- **NSSA** — the underlying sequencer architecture that LEZ runs on
+- **SPEL** — the Rust macro framework for writing LEZ programs (github.com/logos-co/spel)
+- **lssa** — the local sequencer + wallet for development (github.com/logos-blockchain/lssa)
 
 > **💡 Tip:** If you're evaluating LEZ for a project, the mental model chapter is the fastest way to understand where it fits relative to tools you already know.
 
@@ -114,27 +122,42 @@ This is a security feature, not an oversight. It means that the code that execut
 Programs are written in Rust using the SPEL macro framework. A minimal program looks like this:
 
 ```rust
-use spel::prelude::*;
+#![no_main]
+use nssa_core::account::AccountWithMetadata;
+use nssa_core::program::AccountPostState;
+use lez_framework::prelude::*;
+risc0_zkvm::guest::entry!(main);
 
 #[lez_program]
 mod counter {
-    #[derive(Default, BorshSerialize, BorshDeserialize)]
-    pub struct CounterState {
-        pub count: u64,
-        pub owner: [u8; 32],
-    }
+    #[allow(unused_imports)]
+    use super::*;
 
     #[instruction]
     pub fn increment(
-        #[account(mut)] counter: AccountWithMetadata<CounterState>,
-        #[account(signer)] authority: AccountWithMetadata<()>,
-    ) -> ProgramResult {
-        require!(authority.id() == counter.data.owner, "unauthorized");
-        counter.data.count += 1;
-        Ok(())
+        #[account(mut, pda = literal("counter"))]
+        counter: AccountWithMetadata,
+        #[account(signer)]
+        authority: AccountWithMetadata,
+    ) -> LezResult {
+        let current = u64::from_le_bytes(counter.account.data[..8].try_into().unwrap());
+        let new_value = current + 1;
+        let mut updated = counter.account.clone();
+        updated.data = new_value.to_le_bytes().to_vec().try_into().unwrap();
+        Ok(LezOutput::states_only(vec![
+            AccountPostState::new(updated),
+            AccountPostState::new(authority.account.clone()),
+        ]))
     }
 }
 ```
+
+Key differences from other account-based chains:
+- **`AccountWithMetadata` has no generic type parameter** — account data is raw bytes (`account.data`), deserialized manually
+- **`#![no_main]` and `risc0_zkvm::guest::entry!(main)`** are required for the RISC Zero guest binary
+- **`LezResult`** is the return type alias for `Result<LezOutput, LezError>`
+- **No `require!` macro** — use standard `if / return Err(...)` patterns
+- Account data is accessed as `counter.account.data` (a `Vec<u8>`) and deserialized manually
 
 The `#[lez_program]` macro wraps the module and generates the program entry point. The `#[instruction]` macro generates dispatch logic and IDL entries for each callable function. Account constraints like `#[account(signer)]` and `#[account(mut)]` are checked before your function body runs.
 

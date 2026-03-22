@@ -221,40 +221,40 @@ Set this to a persistent directory. All wallet state (keys, account metadata) is
 
 ---
 
-### `wallet init`
+### `wallet check-health`
 
-Initialize the wallet configuration directory.
+Verify that the sequencer is reachable.
 
 ```bash
-wallet init
-NSSA_WALLET_HOME_DIR=/my/wallet wallet init
+wallet check-health
 ```
 
-Creates the config directory and generates the initial key material. Run this once per wallet instance.
+Checks connectivity to the sequencer configured in `NSSA_WALLET_HOME_DIR`. Use this to confirm the sequencer is running before deploying or calling programs.
 
 ---
 
-### `wallet account new`
+### `wallet account new private`
 
-Create a new genesis account.
+Create a new private (shielded) account.
 
 ```bash
-wallet account new
 wallet account new private    # create a private (shielded) account
 ```
 
-Genesis accounts are keypair-backed. The `private` variant creates a shielded account with a commitment-based identity. Both types return an account ID after creation.
+Creates a shielded account with a commitment-based identity. Returns an account ID of the form `Private/<base58>`.
+
+> **Note:** There is no `wallet account new` (without `private`) for the standard workflow. The debug config ships with pre-funded genesis accounts — you don't need to create new public accounts.
 
 > **💡 Tip:** The `nsk` (Nullifier Spending Key) is the root secret for all private accounts. Back it up immediately. See [Deployment: Key Management](../part5/deployment.md#key-management).
 
 ---
 
-### `wallet account list`
+### `wallet account ls`
 
 List all accounts managed by this wallet.
 
 ```bash
-wallet account list
+wallet account ls
 ```
 
 Output includes account IDs, types (genesis/private), and balances if applicable.

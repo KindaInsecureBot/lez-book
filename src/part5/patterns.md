@@ -11,25 +11,26 @@ Sometimes you want to initialize an account the first time it's used, or update 
 ```rust
 #[instruction]
 pub fn ensure_player_state(
-    #[account(mut)] player_state: AccountWithMetadata<PlayerState>,
-    #[account(signer)] player: AccountWithMetadata<()>,
-) -> Result<LezOutput, LezError> {
-    let state = if player_state.data() == &PlayerState::default() {
+    #[account(mut)] player_state: AccountWithMetadata,
+    #[account(signer)] player: AccountWithMetadata,
+) -> LezResult {
+    let new_data = if player_state.account.data.is_empty() {
         // First time: initialize
-        PlayerState {
-            tile_count: 0,
-            joined_at: 0,
-        }
+        let state = PlayerState { tile_count: 0, joined_at: 0 };
+        state.to_bytes()
     } else {
         // Already exists: update
-        let mut s = player_state.data().clone();
-        s.tile_count += 1;
-        s
+        let mut state = PlayerState::from_bytes(&player_state.account.data).unwrap();
+        state.tile_count += 1;
+        state.to_bytes()
     };
 
+    let mut updated = player_state.account.clone();
+    updated.data = new_data.try_into().unwrap();
+
     Ok(LezOutput::states_only(vec![
-        AccountPostState::new_claimed_if_default(player_state.with_data(state)),
-        AccountPostState::new(player),
+        AccountPostState::new_claimed_if_default(updated),
+        AccountPostState::new(player.account.clone()),
     ]))
 }
 ```
@@ -45,14 +46,21 @@ Use `new_claimed_if_default` when the account may or may not exist — the seque
 ```rust
 #[instruction]
 pub fn admin_action(
-    #[account(mut, owner = MY_PROGRAM_ID)] config: AccountWithMetadata<ConfigState>,
-    #[account(signer)] caller: AccountWithMetadata<()>,
-) -> Result<LezOutput, LezError> {
-    // Manual ownership check
-    if &config.data().admin != caller.id() {
-        return Err(LezError::InvalidSigner);
+    #[account(mut, owner = MY_PROGRAM_ID)] config: AccountWithMetadata,
+    #[account(signer)] caller: AccountWithMetadata,
+) -> LezResult {
+    // Deserialize config to check the stored admin field
+    let config_state = ConfigState::from_bytes(&config.account.data).unwrap();
+
+    // Manual ownership check — verify the caller is the stored admin
+    if config_state.admin != caller.account.id {
+        return Err(LezError::Unauthorized);
     }
     // ... admin logic ...
+    Ok(LezOutput::states_only(vec![
+        AccountPostState::new(config.account.clone()),
+        AccountPostState::new(caller.account.clone()),
+    ]))
 }
 ```
 
@@ -69,17 +77,19 @@ The canonical pattern for "state per user" — like a mapping:
 ```rust
 #[instruction]
 pub fn create_user_profile(
-    #[account(init, pda = account("user"))] profile: AccountWithMetadata<UserProfile>,
-    #[account(signer)] user: AccountWithMetadata<()>,
+    #[account(init, pda = account("user"))] profile: AccountWithMetadata,
+    #[account(signer)] user: AccountWithMetadata,
     username_hash: [u8; 32],
-) -> Result<LezOutput, LezError> {
+) -> LezResult {
     let state = UserProfile {
         username_hash,
         created_at: 0,
     };
+    let mut new_profile = profile.account.clone();
+    new_profile.data = state.to_bytes().try_into().unwrap();
     Ok(LezOutput::states_only(vec![
-        AccountPostState::new_claimed(profile.with_data(state)),
-        AccountPostState::new(user),
+        AccountPostState::new_claimed(new_profile),
+        AccountPostState::new(user.account.clone()),
     ]))
 }
 ```
@@ -98,29 +108,33 @@ Tracking both a per-user summary AND per-tile state in a single instruction:
 #[instruction]
 pub fn claim_tile(
     #[account(init, pda = [literal("tile"), arg("x"), arg("y")])]
-        tile: AccountWithMetadata<TileState>,
+        tile: AccountWithMetadata,
     #[account(mut, pda = account("player"))]
-        player_state: AccountWithMetadata<PlayerState>,
-    #[account(signer)] player: AccountWithMetadata<()>,
+        player_state: AccountWithMetadata,
+    #[account(signer)] player: AccountWithMetadata,
     x: u64,
     y: u64,
-) -> Result<LezOutput, LezError> {
-    // Update tile
+) -> LezResult {
+    // Build tile data
     let tile_data = TileState {
-        owner_commitment: sha256(player.id()),
+        owner_commitment: sha256(&player.account.id),
         claimed_at: 0,
         terrain: deterministic_terrain(x, y),
         elevation: deterministic_elevation(x, y),
     };
+    let mut new_tile = tile.account.clone();
+    new_tile.data = tile_data.to_bytes().try_into().unwrap();
 
     // Update player summary
-    let mut ps = player_state.data().clone();
+    let mut ps = PlayerState::from_bytes(&player_state.account.data).unwrap();
     ps.tile_count += 1;
+    let mut updated_player_state = player_state.account.clone();
+    updated_player_state.data = ps.to_bytes().try_into().unwrap();
 
     Ok(LezOutput::states_only(vec![
-        AccountPostState::new_claimed(tile.with_data(tile_data)),
-        AccountPostState::new(player_state.with_data(ps)),
-        AccountPostState::new(player),
+        AccountPostState::new_claimed(new_tile),
+        AccountPostState::new(updated_player_state),
+        AccountPostState::new(player.account.clone()),
     ]))
 }
 ```
@@ -243,15 +257,18 @@ For instructions that operate on a variable number of accounts:
 ```rust
 #[instruction]
 pub fn batch_update(
-    #[account(signer)] authority: AccountWithMetadata<()>,
-    #[rest] targets: Vec<AccountWithMetadata<TargetState>>,
-) -> Result<LezOutput, LezError> {
-    let mut post_states = vec![AccountPostState::new(authority)];
+    #[account(signer)] authority: AccountWithMetadata,
+    #[rest] targets: Vec<AccountWithMetadata>,
+) -> LezResult {
+    let mut post_states = vec![AccountPostState::new(authority.account.clone())];
 
     for target in targets {
-        let mut data = target.data().clone();
+        // Deserialize, update, and write back
+        let mut data = TargetState::from_bytes(&target.account.data).unwrap();
         data.last_updated = 0;
-        post_states.push(AccountPostState::new(target.with_data(data)));
+        let mut updated = target.account.clone();
+        updated.data = data.to_bytes().try_into().unwrap();
+        post_states.push(AccountPostState::new(updated));
     }
 
     Ok(LezOutput::states_only(post_states))
@@ -269,4 +286,4 @@ lez-cli call --idl program.json \
   --targets <addr3>
 ```
 
-> **⚠️ Warning:** When calling instructions with `Vec<AccountWithMetadata<T>>` (rest accounts), check your IDL for the exact CLI flag name. See the Gotchas chapter.
+> **⚠️ Warning:** When calling instructions with `Vec<AccountWithMetadata>` (rest accounts), check your IDL for the exact CLI flag name. See the Gotchas chapter.

@@ -66,8 +66,8 @@ cargo risczero --version
 - **`wallet`**: the CLI wallet for managing accounts and signing transactions
 
 ```bash
-git clone https://github.com/nssaorg/lssa.git
-cd lssa
+git clone https://github.com/logos-blockchain/lssa.git ~/lssa
+cd ~/lssa
 # Build both binaries — use --jobs 2 to avoid OOM on constrained hosts
 cargo build --release -p sequencer_runner -p wallet --jobs 2
 ```
@@ -83,17 +83,17 @@ cargo build --release -p sequencer_runner -p wallet --jobs 2
 `lez-cli` lives in the `spel` monorepo alongside the SPEL macro framework and the client code generator.
 
 ```bash
-git clone https://github.com/nssaorg/spel.git
-cd spel
-cargo build --release -p lez-cli -p lez-client-gen --jobs 2
-# Add the built binaries to your PATH for the current session
-export PATH="$PATH:$(pwd)/target/release"
+git clone https://github.com/logos-co/spel.git ~/spel
+cd ~/spel
+cargo build --release -p lez-cli --jobs 2
+# Add the built binary to your PATH for the current session
+export PATH="$PATH:$HOME/spel/target/release"
 ```
 
-To make this permanent, add the export line to your `~/.bashrc` or `~/.zshrc` with the absolute path:
+To make this permanent, add the export line to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-echo 'export PATH="$PATH:/path/to/spel/target/release"' >> ~/.bashrc
+echo 'export PATH="$PATH:$HOME/spel/target/release"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -111,10 +111,17 @@ The sequencer must be running before you can deploy or call any programs. Run it
 
 ```bash
 # From the lssa directory
-./target/release/sequencer_runner --port 3040
+cd ~/lssa
+# Option 1: explicit config file
+./target/release/sequencer_runner --config sequencer_runner/configs/debug/sequencer_config.json &
+
+# Option 2: pass the config directory (also works)
+./target/release/sequencer_runner sequencer_runner/configs/debug/ &
 ```
 
-The sequencer listens on port `3040` by default. Leave this terminal open for the duration of your development session.
+The sequencer starts in the background and listens on the port defined in the debug config. Leave it running for the duration of your development session.
+
+> **⚠️ Warning:** The sequencer takes a **config file or directory path**, not a `--port` flag. Passing `--port` is not a valid argument and will fail. Always use `--config <path>` or pass the config directory directly.
 
 > **💡 Tip:** On first run, the sequencer creates its RocksDB state database in the current directory (or a configured path). If you upgrade `lssa` to a new version, delete the old state directory before starting the new sequencer — stale state from an older version causes subtle, hard-to-debug failures that look like valid RPC responses with wrong data. When in doubt, wipe the state and start fresh.
 
@@ -122,22 +129,27 @@ The sequencer listens on port `3040` by default. Leave this terminal open for th
 
 ## Step 6: Wallet Setup
 
-With the sequencer running, initialize your local wallet and create a genesis account to use for development.
+The debug configuration in `lssa` comes with **pre-configured genesis accounts** that are already funded. You don't need to create new accounts or run an initialization step — you just point the wallet at the debug config directory.
 
 ```bash
-# Initialize the wallet (creates key storage)
-./target/release/wallet init
+# Point the wallet at the debug configuration (pre-funded genesis accounts)
+export NSSA_WALLET_HOME_DIR="$HOME/lssa/wallet/configs/debug"
 
-# Create a new genesis account (funded at chain genesis — usable immediately)
-./target/release/wallet account new
+# Add to ~/.bashrc to persist across sessions
+echo 'export NSSA_WALLET_HOME_DIR="$HOME/lssa/wallet/configs/debug"' >> ~/.bashrc
 
-# List accounts and confirm the new account appears with a balance
-./target/release/wallet account list
+# Verify the sequencer is reachable
+wallet check-health
+
+# List the pre-configured genesis accounts (should show funded accounts)
+wallet account ls
 ```
 
 **Genesis accounts vs. derived accounts:**
 
-Genesis accounts are created directly by the wallet and are funded at chain initialization — they can sign transactions. Derived accounts (PDAs, program-derived addresses) are owned by programs and cannot sign transactions by themselves. When LEZ instructions require a `#[account(signer)]`, it must be a genesis account.
+The debug config ships with pre-funded genesis accounts you can use immediately for development. Derived accounts (PDAs, program-derived addresses) are owned by programs and cannot sign transactions by themselves. When LEZ instructions require a `#[account(signer)]`, it must be a genesis account.
+
+> **⚠️ Warning:** There is no `wallet init` command and no `wallet account new` (for public accounts) in the standard workflow. The debug genesis accounts are pre-configured. Do not try to initialize the wallet — just set `NSSA_WALLET_HOME_DIR` and run `wallet check-health`.
 
 ---
 
@@ -146,14 +158,14 @@ Genesis accounts are created directly by the wallet and are funded at chain init
 Run these checks to confirm the full stack is operational:
 
 ```bash
-# Sequencer health check (should return HTTP 200)
-curl http://localhost:3040/health
+# Sequencer health check (via wallet)
+wallet check-health
 
 # lez-cli version
 lez-cli --version
 
-# Wallet account list (should show your genesis account)
-wallet account list
+# Wallet account list (should show pre-configured genesis accounts)
+wallet account ls
 ```
 
 If all three commands succeed without errors, your environment is ready.
@@ -162,20 +174,20 @@ If all three commands succeed without errors, your environment is ready.
 
 ## Environment Variables
 
-Set these in your shell so that `lez-cli` and other tools can find the sequencer and wallet without extra flags:
+The one required environment variable is `NSSA_WALLET_HOME_DIR`, which points the wallet CLI at the correct configuration directory:
 
 ```bash
-export LEZ_RPC_URL="http://localhost:3040"
-export LEZ_WALLET_PATH="$HOME/.lssa/wallet"
+export NSSA_WALLET_HOME_DIR="$HOME/lssa/wallet/configs/debug"
 ```
 
-Add both lines to your `~/.bashrc` or `~/.zshrc` so they persist across sessions:
+Add this to your `~/.bashrc` or `~/.zshrc` so it persists across sessions:
 
 ```bash
-echo 'export LEZ_RPC_URL="http://localhost:3040"' >> ~/.bashrc
-echo 'export LEZ_WALLET_PATH="$HOME/.lssa/wallet"' >> ~/.bashrc
+echo 'export NSSA_WALLET_HOME_DIR="$HOME/lssa/wallet/configs/debug"' >> ~/.bashrc
 source ~/.bashrc
 ```
+
+> **⚠️ Warning:** There are no `LEZ_RPC_URL` or `LEZ_WALLET_PATH` environment variables. The wallet finds the sequencer via the config files in `NSSA_WALLET_HOME_DIR`. Do not set those fictional env vars — they have no effect.
 
 ---
 
@@ -187,5 +199,7 @@ source ~/.bashrc
 | Build OOM / silent binary corruption | Too many parallel compile jobs | Add `--jobs 2` to `cargo build` |
 | `RocksDB error` on sequencer start | Stale state from old `lssa` version | Delete the RocksDB state directory and restart |
 | RPC errors from `lez-cli` | `lssa` version mismatch | Check which `lssa` revision `lez-cli` expects; avoid rev `767b5af` |
-| `lez-cli: command not found` | Binary not on PATH | Add `spel/target/release` to your `PATH` |
-| `wallet: connection refused` | Sequencer not running | Start `sequencer_runner --port 3040` in a separate terminal |
+| `lez-cli: command not found` | Binary not on PATH | Add `$HOME/spel/target/release` to your `PATH` |
+| `wallet: connection refused` | Sequencer not running | Start `sequencer_runner sequencer_runner/configs/debug/` in a separate terminal |
+| `wallet check-health` fails | `NSSA_WALLET_HOME_DIR` not set or wrong path | Set `export NSSA_WALLET_HOME_DIR="$HOME/lssa/wallet/configs/debug"` |
+| `wallet account ls` shows nothing | Wrong config directory | Verify `NSSA_WALLET_HOME_DIR` points to `lssa/wallet/configs/debug` |

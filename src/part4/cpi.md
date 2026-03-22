@@ -46,23 +46,28 @@ Use `LezOutput::with_chained_calls` instead of `states_only`:
 ```rust
 #[instruction]
 pub fn swap(
-    #[account(mut)] pool: AccountWithMetadata<PoolState>,
-    #[account(signer)] user: AccountWithMetadata<()>,
+    #[account(mut)] pool: AccountWithMetadata,
+    #[account(signer)] user: AccountWithMetadata,
     amount_in: u64,
-) -> Result<LezOutput, LezError> {
+) -> LezResult {
+    // Deserialize pool state from raw bytes
+    let pool_state = PoolState::from_bytes(&pool.account.data).unwrap();
+    let amount_out = compute_out(&pool_state, amount_in);
+
     // Update pool state
     let new_pool_state = PoolState {
-        reserve_a: pool.data().reserve_a + amount_in,
-        reserve_b: pool.data().reserve_b - compute_out(pool.data(), amount_in),
+        reserve_a: pool_state.reserve_a + amount_in,
+        reserve_b: pool_state.reserve_b - amount_out,
     };
-    let updated_pool = pool.with_data(new_pool_state);
+    let mut updated_pool = pool.account.clone();
+    updated_pool.data = new_pool_state.to_bytes().try_into().unwrap();
 
     // Build chained call to token program for the actual token transfer
     let transfer_call = ChainedCall {
         program_id: TOKEN_PROGRAM_ID,
         instruction_name: "transfer".to_string(),
         accounts: vec![
-            CallAccount { id: *user.id(), writable: true, signer: true },
+            CallAccount { id: user.account.id, writable: true, signer: true },
             CallAccount { id: pool_token_account_id, writable: true, signer: false },
         ],
         args: borsh::to_vec(&TransferArgs { amount: amount_in })?,
@@ -71,7 +76,7 @@ pub fn swap(
     Ok(LezOutput::with_chained_calls(
         vec![
             AccountPostState::new(updated_pool),
-            AccountPostState::new(user),
+            AccountPostState::new(user.account.clone()),
         ],
         vec![transfer_call],
     ))
@@ -110,27 +115,33 @@ const TOKEN_PROGRAM_ID: [u32; 8] = [/* risc zero image id of token program */];
 
 #[instruction]
 pub fn swap(
-    #[account(mut)] pool: AccountWithMetadata<PoolState>,
-    #[account(mut)] user_token_in: AccountWithMetadata<TokenAccount>,
-    #[account(mut)] pool_token_in: AccountWithMetadata<TokenAccount>,
-    #[account(mut)] pool_token_out: AccountWithMetadata<TokenAccount>,
-    #[account(mut)] user_token_out: AccountWithMetadata<TokenAccount>,
-    #[account(signer)] user: AccountWithMetadata<()>,
+    #[account(mut)] pool: AccountWithMetadata,
+    #[account(mut)] user_token_in: AccountWithMetadata,
+    #[account(mut)] pool_token_in: AccountWithMetadata,
+    #[account(mut)] pool_token_out: AccountWithMetadata,
+    #[account(mut)] user_token_out: AccountWithMetadata,
+    #[account(signer)] user: AccountWithMetadata,
     amount_in: u64,
-) -> Result<LezOutput, LezError> {
-    let amount_out = compute_out(pool.data(), amount_in);
+) -> LezResult {
+    let pool_state = PoolState::from_bytes(&pool.account.data).unwrap();
+    let amount_out = compute_out(&pool_state, amount_in);
 
     // Update pool state (AMM invariant)
-    let updated_pool = pool.with_data(/* new reserves */);
+    let new_pool_state = PoolState {
+        reserve_a: pool_state.reserve_a + amount_in,
+        reserve_b: pool_state.reserve_b - amount_out,
+    };
+    let mut updated_pool = pool.account.clone();
+    updated_pool.data = new_pool_state.to_bytes().try_into().unwrap();
 
     // Chained call 1: transfer tokens IN (user → pool)
     let transfer_in = ChainedCall {
         program_id: TOKEN_PROGRAM_ID,
         instruction_name: "transfer".to_string(),
         accounts: vec![
-            CallAccount { id: *user_token_in.id(), writable: true, signer: false },
-            CallAccount { id: *pool_token_in.id(), writable: true, signer: false },
-            CallAccount { id: *user.id(), writable: false, signer: true },
+            CallAccount { id: user_token_in.account.id, writable: true, signer: false },
+            CallAccount { id: pool_token_in.account.id, writable: true, signer: false },
+            CallAccount { id: user.account.id, writable: false, signer: true },
         ],
         args: borsh::to_vec(&TransferArgs { amount: amount_in })?,
     };
@@ -140,9 +151,9 @@ pub fn swap(
         program_id: TOKEN_PROGRAM_ID,
         instruction_name: "transfer".to_string(),
         accounts: vec![
-            CallAccount { id: *pool_token_out.id(), writable: true, signer: false },
-            CallAccount { id: *user_token_out.id(), writable: true, signer: false },
-            CallAccount { id: *pool.id(), writable: false, signer: true },
+            CallAccount { id: pool_token_out.account.id, writable: true, signer: false },
+            CallAccount { id: user_token_out.account.id, writable: true, signer: false },
+            CallAccount { id: pool.account.id, writable: false, signer: true },
         ],
         args: borsh::to_vec(&TransferArgs { amount: amount_out })?,
     };
@@ -150,11 +161,11 @@ pub fn swap(
     Ok(LezOutput::with_chained_calls(
         vec![
             AccountPostState::new(updated_pool),
-            AccountPostState::new(user_token_in),
-            AccountPostState::new(pool_token_in),
-            AccountPostState::new(pool_token_out),
-            AccountPostState::new(user_token_out),
-            AccountPostState::new(user),
+            AccountPostState::new(user_token_in.account),
+            AccountPostState::new(pool_token_in.account),
+            AccountPostState::new(pool_token_out.account),
+            AccountPostState::new(user_token_out.account),
+            AccountPostState::new(user.account.clone()),
         ],
         vec![transfer_in, transfer_out],
     ))

@@ -125,7 +125,7 @@ wallet.send_privacy_preserving_tx(
 ).await?;
 ```
 
-The program code doesn't change — it receives `AccountWithMetadata<T>` for all accounts, public or private. The visibility is set by the wallet based on which accounts are private vs public.
+The program code doesn't change — it receives `AccountWithMetadata` for all accounts, public or private. The visibility is set by the wallet based on which accounts are private vs public.
 
 ### Why Per-Account Visibility Enables This
 
@@ -255,7 +255,7 @@ The privacy circuit is a second RISC Zero program that wraps your program. Here'
 Using your `nsk`, the wallet decrypts the ciphertext from the blockchain and reconstructs the plaintext account state. This never leaves your machine.
 
 **2. Your program executes inside the zkVM**
-The privacy circuit calls your program instruction with the decrypted data. Your program sees plain `AccountWithMetadata<T>` — no encryption, no special handling. It runs its logic exactly as in a public transaction.
+The privacy circuit calls your program instruction with the decrypted data. Your program sees plain `AccountWithMetadata` — no encryption, no special handling. It runs its logic exactly as in a public transaction.
 
 **3. Privacy circuit validates execution**
 The circuit checks:

@@ -55,31 +55,32 @@ This generates a workspace with the following structure:
 
 ```
 counter/
-├── Cargo.toml          # workspace manifest
-├── Makefile            # build/deploy/call shortcuts
-├── core/
+├── Cargo.toml                              # workspace manifest
+├── Makefile                                # build, idl, cli, deploy, inspect targets
+├── counter_core/
 │   ├── Cargo.toml
 │   └── src/
-│       └── lib.rs      # your program logic — SPEL macros live here
+│       └── lib.rs                          # shared types (state structs, serialization)
 ├── methods/
 │   ├── Cargo.toml
+│   ├── build.rs                            # risc0_build::embed_methods()
 │   └── guest/
 │       └── src/
-│           └── main.rs # zkVM guest entry point — wires core logic into the ZK proof
-├── idl-gen/
-│   └── src/
-│       └── main.rs     # binary that generates the program's IDL JSON
-└── cli-wrapper/
+│           └── bin/
+│               └── counter.rs             # on-chain program (NOT main.rs)
+└── examples/
     └── src/
-        └── main.rs     # CLI wrapper that lez-cli uses to call instructions
+        └── bin/
+            ├── generate_idl.rs            # IDL generator (uses generate_idl! macro)
+            └── counter_cli.rs             # CLI wrapper (3 lines)
 ```
 
 **Component roles:**
 
-- **`core/`** — where you write your program. Contains your state types and instruction logic using SPEL macros. This is the only crate you'll edit for most programs.
-- **`methods/`** — the RISC Zero zkVM guest crate. It imports `core` and exposes it to the zkVM prover. You generally don't edit this unless you need custom guest behavior.
-- **`idl-gen/`** — a small binary that introspects your program and emits an IDL JSON file (like an ABI). Run it after changes to `core`.
-- **`cli-wrapper/`** — auto-generated CLI glue that `lez-cli` uses to dispatch instruction calls. Regenerated from the IDL.
+- **`counter_core/`** — shared types used by both the guest and the IDL generator. Put your state struct definitions and manual serialization helpers here. Note: the crate is named `counter_core`, not `core`.
+- **`methods/guest/src/bin/counter.rs`** — the actual on-chain program. This is NOT `main.rs` — it lives in `bin/`. Contains `#![no_main]`, `risc0_zkvm::guest::entry!(main)`, and your `#[lez_program]` module.
+- **`examples/src/bin/generate_idl.rs`** — generates the IDL JSON. Run via `make idl` or `cargo run --example generate_idl`.
+- **`examples/src/bin/counter_cli.rs`** — 3-line CLI wrapper that `lez-cli` uses to dispatch instruction calls.
 
 > **⚠️ Warning:** The scaffold from `lez-cli init` may be missing `risc0-zkvm` metadata in `methods/Cargo.toml`. If you get build errors about missing zkVM crate features or a missing `risc0` dependency, open `methods/Cargo.toml` and verify that the risc0 dependencies are present and have the correct feature flags for your toolchain version.
 
@@ -87,94 +88,126 @@ counter/
 
 ## Step 2: Define the State
 
-Open `core/src/lib.rs` and define the state type for a counter account:
+Open `counter_core/src/lib.rs` and define the state type for a counter account.
+
+**Important:** `borsh_derive` proc macros **do not compile** for the `riscv32im` guest target. Use manual serialization instead:
 
 ```rust
-use borsh::{BorshDeserialize, BorshSerialize};
-use spel::prelude::*;
+// counter_core/src/lib.rs
 
-#[derive(BorshSerialize, BorshDeserialize, Default, Clone)]
+/// Counter state: 8 bytes count + 32 bytes owner = 40 bytes total
 pub struct CounterState {
     pub count: u64,
     pub owner: [u8; 32],
 }
+
+impl CounterState {
+    pub const SIZE: usize = 8 + 32;
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::SIZE);
+        buf.extend_from_slice(&self.count.to_le_bytes());
+        buf.extend_from_slice(&self.owner);
+        buf
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < Self::SIZE {
+            return None;
+        }
+        let count = u64::from_le_bytes(data[..8].try_into().ok()?);
+        let owner: [u8; 32] = data[8..40].try_into().ok()?;
+        Some(Self { count, owner })
+    }
+}
 ```
 
-`CounterState` is serialized to and from account data using Borsh. Every state type in LEZ must implement `BorshSerialize` and `BorshDeserialize`.
-
-> **⚠️ Warning:** `borsh_derive` does **not** compile for the `riscv32im` guest target. Do not add `borsh-derive` as a separate dependency. Instead, enable Borsh's built-in derive feature directly:
->
-> ```toml
-> # In core/Cargo.toml
-> borsh = { version = "1", features = ["derive"] }
-> ```
->
-> Using `borsh_derive` as a standalone crate is one of the most common compilation errors for new LEZ developers. The derive macros in `borsh_derive` depend on `proc-macro2` internals that don't build cleanly for the RISC Zero guest target.
+> **⚠️ Warning:** `borsh_derive` does **not** compile for the `riscv32im` guest target. Do not use `#[derive(BorshSerialize, BorshDeserialize)]` in code that runs in the guest. Always use manual serialization as shown above. This is one of the most common compilation errors for new LEZ developers.
 
 ---
 
 ## Step 3: Write the Program Logic
 
-Below `CounterState`, still in `core/src/lib.rs`, define the program module with its three instructions:
+In `methods/guest/src/bin/counter.rs`, define the program with its instructions. Note the required `#![no_main]` and `risc0_zkvm::guest::entry!(main)` — these are mandatory for the RISC Zero guest binary:
 
 ```rust
-use spel::prelude::*;
+// methods/guest/src/bin/counter.rs
+#![no_main]
+use counter_core::CounterState;
+use nssa_core::account::AccountWithMetadata;
+use nssa_core::program::AccountPostState;
+use lez_framework::prelude::*;
+risc0_zkvm::guest::entry!(main);
 
 #[lez_program]
 mod counter {
+    #[allow(unused_imports)]
     use super::*;
 
     /// Initialize a new counter account owned by `authority`.
     #[instruction]
     pub fn initialize(
-        #[account(init)] counter: AccountWithMetadata<CounterState>,
-        #[account(signer)] authority: AccountWithMetadata<()>,
-    ) -> Result<LezOutput, LezError> {
-        let mut state = counter.data().clone();
-        state.owner = *authority.id();
-        state.count = 0;
+        #[account(init)]
+        counter: AccountWithMetadata,
+        #[account(signer)]
+        authority: AccountWithMetadata,
+    ) -> LezResult {
+        let state = CounterState {
+            count: 0,
+            owner: authority.account.id,
+        };
 
-        let updated = counter.with_data(state);
+        let mut updated = counter.account.clone();
+        updated.data = state.to_bytes().try_into().unwrap();
+
         Ok(LezOutput::states_only(vec![
             AccountPostState::new_claimed(updated),
-            AccountPostState::new(authority),
+            AccountPostState::new(authority.account.clone()),
         ]))
     }
 
     /// Increment the counter. Only the owner may call this.
     #[instruction]
     pub fn increment(
-        #[account(mut)] counter: AccountWithMetadata<CounterState>,
-        #[account(signer)] authority: AccountWithMetadata<()>,
-    ) -> Result<LezOutput, LezError> {
-        let state = counter.data();
-        if state.owner != *authority.id() {
-            return Err(LezError::InvalidSigner);
+        #[account(mut)]
+        counter: AccountWithMetadata,
+        #[account(signer)]
+        authority: AccountWithMetadata,
+    ) -> LezResult {
+        let state = CounterState::from_bytes(&counter.account.data)
+            .ok_or(LezError::DeserializationError { account_index: 0, message: "bad counter data".into() })?;
+
+        if state.owner != authority.account.id {
+            return Err(LezError::Unauthorized);
         }
 
-        let mut new_state = state.clone();
-        new_state.count += 1;
+        let new_state = CounterState { count: state.count + 1, owner: state.owner };
+        let mut updated = counter.account.clone();
+        updated.data = new_state.to_bytes().try_into().unwrap();
 
-        let updated = counter.with_data(new_state);
         Ok(LezOutput::states_only(vec![
             AccountPostState::new(updated),
-            AccountPostState::new(authority),
+            AccountPostState::new(authority.account.clone()),
         ]))
     }
 
     /// Read the current count. No state is modified.
     #[instruction]
     pub fn get_count(
-        counter: AccountWithMetadata<CounterState>,
-    ) -> Result<LezOutput, LezError> {
+        counter: AccountWithMetadata,
+    ) -> LezResult {
         Ok(LezOutput::states_only(vec![
-            AccountPostState::new(counter),
+            AccountPostState::new(counter.account.clone()),
         ]))
     }
 }
 ```
 
 ### Key concepts
+
+**`AccountWithMetadata` has no generic type parameter.** Unlike some frameworks, there is no `AccountWithMetadata<CounterState>`. It is always just `AccountWithMetadata`. Account data is raw bytes accessed via `account.account.data`, deserialized manually.
+
+**`LezResult`** is the return type alias for `Result<LezOutput, LezError>`. Always use `LezResult`, not the expanded form.
 
 **`#[lez_program]`** marks the module as a LEZ program. The SPEL macro framework uses this to generate the dispatch table, IDL metadata, and guest wiring.
 
@@ -193,8 +226,8 @@ mod counter {
 
 **`AccountPostState`** — every account passed into an instruction must appear in the returned `post_states` vector. The sequencer uses this to verify that the instruction's state transition is complete and consistent.
 
-- `AccountPostState::new_claimed(account)` — use this for accounts created by `#[account(init)]`. It marks the account as now existing on-chain.
-- `AccountPostState::new(account)` — use this for all other accounts (mutated or read-only pass-through).
+- `AccountPostState::new_claimed(account)` — use this for accounts created by `#[account(init)]`. Takes the inner `Account` struct (from `account_with_metadata.account`), not the `AccountWithMetadata` wrapper.
+- `AccountPostState::new(account)` — use this for all other accounts. Same: takes the inner `Account`.
 
 > **⚠️ Warning:** If you forget to include an account in the `post_states` return value, the sequencer will reject the transaction with a state completeness error. Every account that enters an instruction must exit it.
 
@@ -222,7 +255,7 @@ The build compiles two targets:
 ```bash
 make idl
 # Equivalent manual command:
-cargo run --release -p idl-gen
+cargo run --example generate_idl --release
 ```
 
 This produces a `counter.json` IDL file (Interface Description Language — analogous to a Solidity ABI). A snippet of the generated output looks like:
@@ -276,7 +309,8 @@ Open a second terminal for the sequencer if it isn't already running:
 
 ```bash
 # Terminal 1 — keep running
-sequencer_runner --port 3040
+cd ~/lssa
+./target/release/sequencer_runner sequencer_runner/configs/debug/ &
 ```
 
 In your project terminal:
@@ -310,7 +344,7 @@ lez-cli call --idl counter.json \
   --authority <your-genesis-account>
 ```
 
-Replace `<account-address>` with the address you want to use for the counter state account (this can be any valid address that doesn't already have state), and `<your-genesis-account>` with the address from `wallet account list`.
+Replace `<account-address>` with the address you want to use for the counter state account (this can be any valid address that doesn't already have state), and `<your-genesis-account>` with the address from `wallet account ls`.
 
 ---
 
@@ -320,13 +354,42 @@ Replace `<account-address>` with the address you want to use for the counter sta
 # Send an increment transaction
 make cli ARGS="increment --counter <account-address> --authority <your-genesis-account>"
 
-# Read the account state directly from the sequencer
-lez-cli account get <account-address>
+# Inspect the raw account data
+wallet account inspect <account-address>
 ```
 
-The `account get` output will show the deserialized `CounterState` with the updated `count` field. After one `increment` call, you should see `count: 1`.
+The `wallet account inspect` output shows the raw bytes of the account's `data` field. You'll need to deserialize them manually using your `CounterState::from_bytes` function. After one `increment` call, the first 8 bytes should decode to `count: 1`.
 
-> **🔄 Coming from Solidity?** In Solidity, you'd call `counter.getCount()` to read state via an `eth_call`. In LEZ, `lez-cli account get` reads the account's raw state from the sequencer and deserializes it. There's no equivalent of a "view function" RPC call — state reads happen by fetching account data directly, not by executing program logic. The `get_count` instruction in our program exists for cases where you want a verified, ZK-proved read that appears in a transaction log.
+> **🔄 Coming from Solidity?** In Solidity, you'd call `counter.getCount()` via `eth_call` — a read-only simulation that runs your contract code. **LEZ has no equivalent of `eth_call` or `view` functions.** There is no separate "read" path. State reads work by fetching raw account data from the sequencer and deserializing it off-chain. Use `wallet account inspect <account-id>` to view raw bytes, or `lez-cli --dry-run` to simulate an instruction call without submitting a transaction. The `get_count` instruction in our program exists only when you need a verified, ZK-proved read that appears in the transaction log.
+
+---
+
+## Reading State After a Transaction
+
+This is one of the most common points of confusion for Solidity developers. There is no `view` function mechanism in LEZ. Here are your options:
+
+**Option 1: Inspect raw account data**
+
+```bash
+wallet account inspect <account-id>
+```
+
+This shows the raw bytes stored in the account's `data` field. Deserialize them using your `CounterState::from_bytes` function off-chain.
+
+**Option 2: Dry-run an instruction**
+
+```bash
+lez-cli call --idl counter.json \
+  --instruction get_count \
+  --dry-run \
+  --counter <account-address>
+```
+
+`--dry-run` simulates the instruction without submitting it to the sequencer. The output shows what the account state would look like after the call.
+
+**Option 3: Off-chain deserialization**
+
+Fetch the raw account bytes from the sequencer RPC and deserialize in your client code. This is what your TypeScript or Rust client does when it reads state programmatically.
 
 ---
 

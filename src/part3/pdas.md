@@ -63,25 +63,38 @@ PDA = SHA-256(program_id_as_[u32;8] || combined_seed)
 Mapping equivalent: `mapping(address => PlayerState) players`
 
 ```rust
+// PlayerState with manual serialization (borsh_derive doesn't compile for riscv32im)
 pub struct PlayerState {
     pub tile_count: u64,
     pub joined_at: u64,
 }
 
+impl PlayerState {
+    pub const SIZE: usize = 8 + 8;
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::SIZE);
+        buf.extend_from_slice(&self.tile_count.to_le_bytes());
+        buf.extend_from_slice(&self.joined_at.to_le_bytes());
+        buf
+    }
+}
+
 #[instruction]
 pub fn join(
-    #[account(init, pda = account("player"))] player_state: AccountWithMetadata<PlayerState>,
-    #[account(signer)] player: AccountWithMetadata<()>,
-) -> Result<LezOutput, LezError> {
+    #[account(init, pda = account("player"))] player_state: AccountWithMetadata,
+    #[account(signer)] player: AccountWithMetadata,
+) -> LezResult {
     let state = PlayerState {
         tile_count: 0,
         joined_at: 0,
     };
 
-    let updated = player_state.with_data(state);
+    let mut new_account = player_state.account.clone();
+    new_account.data = state.to_bytes().try_into().unwrap();
+
     Ok(LezOutput::states_only(vec![
-        AccountPostState::new_claimed(updated),
-        AccountPostState::new(player),
+        AccountPostState::new_claimed(new_account),
+        AccountPostState::new(player.account.clone()),
     ]))
 }
 ```
@@ -93,7 +106,7 @@ The `player_state` account's address is derived from the `player` account's ID. 
 From the logos-land program — each hex tile is a PDA keyed by `(x, y)` coordinates:
 
 ```rust
-// Hex tile state
+// Hex tile state — manual serialization, no derives
 pub struct TileState {
     pub owner_commitment: [u8; 32], // SHA256 of owner pubkey (for privacy)
     pub claimed_at: u64,
@@ -101,13 +114,25 @@ pub struct TileState {
     pub elevation: u8,
 }
 
+impl TileState {
+    pub const SIZE: usize = 32 + 8 + 1 + 1;
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::SIZE);
+        buf.extend_from_slice(&self.owner_commitment);
+        buf.extend_from_slice(&self.claimed_at.to_le_bytes());
+        buf.push(self.terrain);
+        buf.push(self.elevation);
+        buf
+    }
+}
+
 #[instruction]
 pub fn claim(
-    #[account(init, pda = [literal("tile"), arg("x"), arg("y")])] tile: AccountWithMetadata<TileState>,
-    #[account(signer)] player: AccountWithMetadata<()>,
+    #[account(init, pda = [literal("tile"), arg("x"), arg("y")])] tile: AccountWithMetadata,
+    #[account(signer)] player: AccountWithMetadata,
     x: u64, // biased coords (signed coords stored as u64 with bias)
     y: u64,
-) -> Result<LezOutput, LezError> {
+) -> LezResult {
     // ...
 }
 ```

@@ -56,24 +56,37 @@ The contract address identifies this specific instance. Storage slot `0` is `cou
 A program is a Rust crate compiled to `riscv32im` (RISC-V 32-bit) and loaded into the RISC Zero zkVM. The program is identified by its **ImageID** — the hash of the compiled guest binary. Multiple independent state accounts can be owned by the same program.
 
 ```rust
-use spel::prelude::*;
+#![no_main]
+use nssa_core::account::AccountWithMetadata;
+use nssa_core::program::AccountPostState;
+use lez_framework::prelude::*;
+risc0_zkvm::guest::entry!(main);
 
 #[lez_program]
 mod counter {
-    #[derive(Default, BorshSerialize, BorshDeserialize)]
-    pub struct CounterState {
-        pub count: u64,
-        pub owner: [u8; 32],
-    }
+    #[allow(unused_imports)]
+    use super::*;
 
     #[instruction]
     pub fn increment(
-        #[account(mut)] counter: AccountWithMetadata<CounterState>,
-        #[account(signer)] authority: AccountWithMetadata<()>,
-    ) -> ProgramResult {
-        require!(authority.id() == counter.data.owner, "unauthorized");
-        counter.data.count += 1;
-        Ok(())
+        #[account(mut)] counter: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+    ) -> LezResult {
+        let state = CounterState::from_bytes(&counter.account.data)
+            .ok_or(LezError::DeserializationError { account_index: 0, message: "bad data".into() })?;
+
+        if state.owner != authority.account.id {
+            return Err(LezError::Unauthorized);
+        }
+
+        let new_state = CounterState { count: state.count + 1, owner: state.owner };
+        let mut updated = counter.account.clone();
+        updated.data = new_state.to_bytes().try_into().unwrap();
+
+        Ok(LezOutput::states_only(vec![
+            AccountPostState::new(updated),
+            AccountPostState::new(authority.account.clone()),
+        ]))
     }
 }
 ```
@@ -119,18 +132,22 @@ An account is a structured object with these fields:
 - **owner**: the ImageID of the program authorized to write to it
 - **data**: a Borsh-serialized struct (your `CounterState`, `TokenAccount`, etc.)
 
-In SPEL, accounts are typed via `AccountWithMetadata<T>`:
+In SPEL, accounts are typed as `AccountWithMetadata` — there is **no generic type parameter**. Account data is raw bytes, accessed via `.account.data` and deserialized manually:
 
 ```rust
-// T is your data struct — deserialized from the account's raw bytes
-let count: u64 = counter.data.count;
+// Access the inner Account struct
+let raw_data: &[u8] = &counter.account.data;
 
-// Metadata (address, balance, nonce, owner) is on the wrapper
-let addr: [u8; 32] = counter.id();
-let balance: u64 = counter.lamports();
+// Deserialize manually (borsh_derive doesn't compile for riscv32im)
+let state = CounterState::from_bytes(raw_data).unwrap();
+let count: u64 = state.count;
+
+// Address is inside the inner Account struct
+let addr: [u8; 32] = counter.account.id;
+let balance: u64 = counter.account.balance;
 ```
 
-When you mark an account `#[account(mut)]`, the SPEL runtime serializes and writes back the modified data at the end of the instruction. If you don't mark it `mut`, the account is read-only and writes are rejected.
+When you mark an account `#[account(mut)]`, you must explicitly clone and modify the inner `account` field and pass it to `AccountPostState::new(updated_account)`. If you don't mark it `mut`, the account is read-only.
 
 > **⚠️ Warning:** The `#[account(mut)]` attribute is a constraint checked at runtime by the SPEL framework. If you forget it on an account you modify, the instruction will fail — even if the Rust compiler accepts the code.
 
@@ -153,16 +170,24 @@ There is no `msg.sender` global. Instead, you declare a signer account as an exp
 ```rust
 #[instruction]
 pub fn increment(
-    #[account(mut)] counter: AccountWithMetadata<CounterState>,
-    #[account(signer)] authority: AccountWithMetadata<()>,
-) -> ProgramResult {
-    require!(authority.id() == counter.data.owner, "unauthorized");
-    counter.data.count += 1;
-    Ok(())
+    #[account(mut)] counter: AccountWithMetadata,
+    #[account(signer)] authority: AccountWithMetadata,
+) -> LezResult {
+    let state = CounterState::from_bytes(&counter.account.data).unwrap();
+    if state.owner != authority.account.id {
+        return Err(LezError::Unauthorized);
+    }
+    let new_state = CounterState { count: state.count + 1, owner: state.owner };
+    let mut updated = counter.account.clone();
+    updated.data = new_state.to_bytes().try_into().unwrap();
+    Ok(LezOutput::states_only(vec![
+        AccountPostState::new(updated),
+        AccountPostState::new(authority.account.clone()),
+    ]))
 }
 ```
 
-The `#[account(signer)]` constraint means: "the transaction must include a valid signature from the private key corresponding to this account's address." The `.id()` call retrieves that address, which you can then compare against whatever is stored in your state.
+The `#[account(signer)]` constraint means: "the transaction must include a valid signature from the private key corresponding to this account's address." You access that address via `authority.account.id`, which you can then compare against whatever is stored in your state.
 
 > **🔄 Coming from Solidity?** `msg.sender` is not a free global in LEZ — it's a first-class account you explicitly declare. This makes the authorization model visible in the function signature rather than hidden in the body. It also means you can have multiple signers in a single instruction.
 
@@ -188,20 +213,22 @@ There is no constructor. Instead, you write an `initialize` (or `init`) instruct
 ```rust
 #[instruction]
 pub fn initialize(
-    #[account(init, mut)] state: AccountWithMetadata<CounterState>,
-    #[account(signer)] authority: AccountWithMetadata<()>,
-) -> ProgramResult {
-    state.data.owner = authority.id();
-    state.data.count = 0;
-    Ok(())
+    #[account(init)] state: AccountWithMetadata,
+    #[account(signer)] authority: AccountWithMetadata,
+) -> LezResult {
+    let init_state = CounterState { owner: authority.account.id, count: 0 };
+    let mut new_state = state.account.clone();
+    new_state.data = init_state.to_bytes().try_into().unwrap();
+    Ok(LezOutput::states_only(vec![
+        AccountPostState::new_claimed(new_state),
+        AccountPostState::new(authority.account.clone()),
+    ]))
 }
 ```
 
-The `init` constraint checks that `state.data` equals `CounterState::default()` before your code runs. If the account already has non-default data, the instruction fails. This prevents re-initialization attacks.
+The `init` constraint checks that the account's data is empty/default before your code runs. If the account already has data, the instruction fails — preventing re-initialization attacks.
 
-The `mut` constraint is also required here — you can't write to an account without it.
-
-> **⚠️ Warning:** `#[account(init)]` checks that the data equals `Default::default()`, not that the account is new. Make sure your state struct derives `Default` and that the default value is a meaningful "uninitialized" sentinel.
+> **⚠️ Warning:** `#[account(init)]` implies `mut`. Do not combine `#[account(init, mut)]` — `init` alone is correct and adding `mut` is redundant (and may cause issues).
 
 ---
 
@@ -264,13 +291,20 @@ Account constraints on `#[instruction]` parameters serve the same role. They're 
 ```rust
 #[instruction]
 pub fn withdraw(
-    #[account(mut)] vault: AccountWithMetadata<VaultState>,
-    #[account(signer)] authority: AccountWithMetadata<()>,
-    #[account(owner = PROGRAM_ID)] config: AccountWithMetadata<ConfigState>,
-) -> ProgramResult {
-    require!(authority.id() == vault.data.owner, "not the owner");
+    #[account(mut)] vault: AccountWithMetadata,
+    #[account(signer)] authority: AccountWithMetadata,
+    #[account(owner = PROGRAM_ID)] config: AccountWithMetadata,
+) -> LezResult {
+    let vault_state = VaultState::from_bytes(&vault.account.data).unwrap();
+    if vault_state.owner != authority.account.id {
+        return Err(LezError::Unauthorized);
+    }
     // ...
-    Ok(())
+    Ok(LezOutput::states_only(vec![
+        AccountPostState::new(vault.account.clone()),
+        AccountPostState::new(authority.account.clone()),
+        AccountPostState::new(config.account.clone()),
+    ]))
 }
 ```
 
@@ -279,13 +313,11 @@ Available constraints:
 | Constraint | Effect |
 |---|---|
 | `signer` | Transaction must include a valid signature for this account |
-| `mut` | Account is writeable; SPEL writes back changes at end |
-| `init` | Account data must equal `Default::default()` |
+| `mut` | Account is writeable |
+| `init` | Account data must be empty/default; implies mut |
 | `owner = <IMAGE_ID>` | Account's `owner` field must equal the given ImageID |
 
-You can combine constraints: `#[account(init, mut)]` is common for initialization.
-
-> **🔄 Coming from Solidity?** Modifiers in Solidity run arbitrary code. Account constraints in LEZ are a closed set of declarative checks. More complex conditions (like "this authority must match the stored owner") still need to be written as `require!()` statements in your function body.
+> **🔄 Coming from Solidity?** Modifiers in Solidity run arbitrary code. Account constraints in LEZ are a closed set of declarative checks. More complex conditions (like "this authority must match the stored owner") are written as `if / return Err(...)` in your function body. There is no `require!` macro.
 
 ---
 
@@ -418,7 +450,7 @@ The tradeoff is verbosity. You must explicitly list every account your instructi
 | `msg.sender` | `#[account(signer)] authority` | Explicit, not a global |
 | `constructor` | `initialize` instruction with `#[account(init)]` | One-time check via default data |
 | `mapping(k => v)` | PDA-derived account per key | Address computed from seeds |
-| `modifier onlyOwner` | `#[account(signer)]` + `require!` | Constraints are closed-set; logic is in body |
+| `modifier onlyOwner` | `#[account(signer)]` + `if/return Err` | Constraints are closed-set; logic is in body |
 | `emit Transfer(...)` | No equivalent yet | Events not yet implemented |
 | `delegatecall` | `ChainedCall::new(IMAGE_ID)` | No shared storage context |
 | ABI JSON | IDL JSON | Same purpose, different format |

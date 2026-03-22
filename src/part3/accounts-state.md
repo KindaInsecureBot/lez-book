@@ -38,20 +38,26 @@ This means you can safely accept deposits from anyone without worrying about una
 
 ## AccountWithMetadata
 
-In SPEL, you work with `AccountWithMetadata<T>` where `T` is your state struct:
+In SPEL, accounts are typed as `AccountWithMetadata` — there is **no generic type parameter**. Account data is raw bytes, accessed via `.account.data` and deserialized manually:
 
 ```rust
-// An account holding CounterState
-let counter: AccountWithMetadata<CounterState>;
+// All accounts are AccountWithMetadata — no generic param
+let counter: AccountWithMetadata;
 
-// Access the data
-let state: &CounterState = counter.data();
+// Access raw account data (Vec<u8>)
+let raw_data: &[u8] = &counter.account.data;
 
-// Get the account ID (address)
-let addr: &[u8; 32] = counter.id();
+// Get the account ID (address) — it's inside the inner Account struct
+let addr: [u8; 32] = counter.account.id;
 
-// Create a new version with updated data
-let updated = counter.with_data(new_state);
+// Deserialize manually (borsh_derive doesn't compile for riscv32im)
+let state = CounterState::from_bytes(raw_data)
+    .ok_or(LezError::DeserializationError { account_index: 0, message: "bad data".into() })?;
+
+// Update: clone the inner Account and set new data
+let mut updated = counter.account.clone();
+updated.data = new_state.to_bytes().try_into().unwrap();
+// Then pass `updated` (an Account) to AccountPostState::new(updated)
 ```
 
 ## AccountPostState — new vs new_claimed
@@ -75,21 +81,23 @@ A common pattern is "initialize if not yet initialized, otherwise update." Rathe
 ```rust
 #[instruction]
 pub fn ensure_initialized(
-    #[account(mut)] account: AccountWithMetadata<MyState>,
-    #[account(signer)] owner: AccountWithMetadata<()>,
-) -> Result<LezOutput, LezError> {
-    let post_state = if *account.raw_account() == Account::default() {
-        // Account doesn't exist yet — claim it
-        let state = MyState { owner: *owner.id(), value: 0 };
-        AccountPostState::new_claimed(account.with_data(state))
+    #[account(mut)] account: AccountWithMetadata,
+    #[account(signer)] owner: AccountWithMetadata,
+) -> LezResult {
+    let post_state = if account.account.data.is_empty() {
+        // Account doesn't exist yet — initialize and claim it
+        let state = MyState { owner: owner.account.id, value: 0 };
+        let mut new_account = account.account.clone();
+        new_account.data = state.to_bytes().try_into().unwrap();
+        AccountPostState::new_claimed(new_account)
     } else {
-        // Account already exists — just update
-        AccountPostState::new(account)
+        // Account already exists — pass through unchanged
+        AccountPostState::new(account.account.clone())
     };
 
     Ok(LezOutput::states_only(vec![
         post_state,
-        AccountPostState::new(owner),
+        AccountPostState::new(owner.account.clone()),
     ]))
 }
 ```
@@ -105,13 +113,13 @@ This is a common source of bugs:
 ```rust
 // ❌ Wrong — forgot to include authority in post_states
 Ok(LezOutput::states_only(vec![
-    AccountPostState::new(counter),
+    AccountPostState::new(counter.account.clone()),
 ]))
 
 // ✅ Correct — all accounts returned
 Ok(LezOutput::states_only(vec![
-    AccountPostState::new(counter),
-    AccountPostState::new(authority),
+    AccountPostState::new(counter.account.clone()),
+    AccountPostState::new(authority.account.clone()),
 ]))
 ```
 
@@ -158,18 +166,18 @@ impl MyState {
 
 ### The Core Crate Pattern
 
-The standard project layout puts shared types in a `core` crate that is used by both the guest (program) and host (client, IDL gen):
+The standard project layout puts shared types in a `<name>_core` crate (e.g., `counter_core`) used by both the guest program and the IDL generator:
 
 ```
-my_program/
-├── core/           # Shared types — compiled for both native and riscv32im
-│   └── src/lib.rs  # MyState, manual serialization, constants
-├── guest/          # Program binary — compiled only for riscv32im
-│   └── src/main.rs # Uses core types
-├── host/           # Client code — compiled only for native
-│   └── src/main.rs # Uses core types
-└── idl-gen/        # IDL generator — compiled only for native
-    └── src/main.rs
+counter/
+├── counter_core/   # Shared types — compiled for both native and riscv32im
+│   └── src/lib.rs  # CounterState, manual serialization, constants
+├── methods/        # RISC Zero guest crate — compiled only for riscv32im
+│   └── guest/src/bin/counter.rs  # Uses counter_core types
+└── examples/       # Host-side binaries — compiled only for native
+    └── src/bin/
+        ├── generate_idl.rs  # Uses counter_core types
+        └── counter_cli.rs
 ```
 
 The core crate CAN derive `serde::Serialize`/`Deserialize` — those work fine everywhere. Only `borsh_derive` proc macros are broken for `riscv32im`. Manual Borsh serialization in the core crate works in both targets.
@@ -215,7 +223,7 @@ Use `#[account(owner = PROGRAM_ID)]` to assert that an account is owned by your 
 ```rust
 #[instruction]
 pub fn transfer(
-    #[account(mut, owner = COUNTER_PROGRAM_ID)] counter: AccountWithMetadata<CounterState>,
+    #[account(mut, owner = COUNTER_PROGRAM_ID)] counter: AccountWithMetadata,
     // ...
 )
 ```
@@ -243,13 +251,31 @@ contract Token {
 // State lives in separate accounts, not in the program
 #[instruction]
 pub fn transfer(
-    #[account(mut)] sender_account: AccountWithMetadata<TokenBalance>,
-    #[account(mut)] receiver_account: AccountWithMetadata<TokenBalance>,
-    #[account(signer)] sender: AccountWithMetadata<()>,
+    #[account(mut)] sender_account: AccountWithMetadata,
+    #[account(mut)] receiver_account: AccountWithMetadata,
+    #[account(signer)] sender: AccountWithMetadata,
     amount: u64,
-) -> Result<LezOutput, LezError> {
-    // Both accounts explicitly passed in
-    // Both must be returned in post_states
+) -> LezResult {
+    // Deserialize both accounts manually from raw bytes
+    let mut sender_state = TokenBalance::from_bytes(&sender_account.account.data).unwrap();
+    let mut receiver_state = TokenBalance::from_bytes(&receiver_account.account.data).unwrap();
+
+    // Apply transfer
+    sender_state.balance -= amount;
+    receiver_state.balance += amount;
+
+    // Write back
+    let mut updated_sender = sender_account.account.clone();
+    updated_sender.data = sender_state.to_bytes().try_into().unwrap();
+    let mut updated_receiver = receiver_account.account.clone();
+    updated_receiver.data = receiver_state.to_bytes().try_into().unwrap();
+
+    // All three accounts must be returned
+    Ok(LezOutput::states_only(vec![
+        AccountPostState::new(updated_sender),
+        AccountPostState::new(updated_receiver),
+        AccountPostState::new(sender.account.clone()),
+    ]))
 }
 ```
 
@@ -260,14 +286,14 @@ For instructions that need a variable number of accounts:
 ```rust
 #[instruction]
 pub fn batch_operation(
-    accounts: Vec<AccountWithMetadata<MyState>>,
-    #[account(signer)] authority: AccountWithMetadata<()>,
-) -> Result<LezOutput, LezError> {
-    // Process each account
+    accounts: Vec<AccountWithMetadata>,
+    #[account(signer)] authority: AccountWithMetadata,
+) -> LezResult {
+    // Process each account — pass through as-is (or modify and write back)
     let mut post_states: Vec<AccountPostState> = accounts.into_iter()
-        .map(|a| AccountPostState::new(a))
+        .map(|a| AccountPostState::new(a.account))
         .collect();
-    post_states.push(AccountPostState::new(authority));
+    post_states.push(AccountPostState::new(authority.account.clone()));
     Ok(LezOutput::states_only(post_states))
 }
 ```

@@ -24,18 +24,21 @@ mod balance_attestation {
 
     #[instruction]
     pub fn attest_balance(
-        balance_account: AccountWithMetadata<TokenBalance>,
+        balance_account: AccountWithMetadata,
         threshold: u64,
-    ) -> Result<LezOutput, LezError> {
-        let balance = balance_account.data().amount;
+    ) -> LezResult {
+        // Deserialize balance from raw bytes (first 8 bytes = u64 amount)
+        let amount = u64::from_le_bytes(
+            balance_account.account.data[..8].try_into().unwrap()
+        );
 
-        if balance < threshold {
-            return Err(LezError::Custom(1)); // attestation fails
+        if amount < threshold {
+            return Err(LezError::Custom(6001)); // attestation fails
         }
 
         // Success: caller's balance >= threshold
         Ok(LezOutput::states_only(vec![
-            AccountPostState::new(balance_account),
+            AccountPostState::new(balance_account.account.clone()),
         ]))
     }
 }
@@ -56,23 +59,24 @@ From the logos-land hex grid program — three types of attestations:
 ```rust
 #[instruction]
 pub fn attest_ownership(
-    tile: AccountWithMetadata<TileState>,
-    #[account(signer)] player: AccountWithMetadata<()>,
+    tile: AccountWithMetadata,
+    #[account(signer)] player: AccountWithMetadata,
     x: u64,
     y: u64,
-) -> Result<LezOutput, LezError> {
-    let state = tile.data();
+) -> LezResult {
+    // Deserialize TileState — first 32 bytes are owner_commitment
+    let owner_commitment_stored: [u8; 32] = tile.account.data[..32].try_into().unwrap();
     // Owner stored as SHA256(pubkey) for privacy — compare commitment
-    let owner_commitment = sha256(player.id());
+    let owner_commitment = sha256(&player.account.id);
 
-    if state.owner_commitment != owner_commitment {
-        return Err(LezError::Custom(2)); // not the owner
+    if owner_commitment_stored != owner_commitment {
+        return Err(LezError::Custom(6002)); // not the owner
     }
 
     // Proof: "player owns this tile" — without revealing which pubkey owns which tile
     Ok(LezOutput::states_only(vec![
-        AccountPostState::new(tile),
-        AccountPostState::new(player),
+        AccountPostState::new(tile.account.clone()),
+        AccountPostState::new(player.account.clone()),
     ]))
 }
 ```
@@ -82,25 +86,30 @@ pub fn attest_ownership(
 ```rust
 #[instruction]
 pub fn attest_connected(
-    tiles: Vec<AccountWithMetadata<TileState>>,
-    #[account(signer)] player: AccountWithMetadata<()>,
+    tiles: Vec<AccountWithMetadata>,
+    #[account(signer)] player: AccountWithMetadata,
     min_connected: u64,
-) -> Result<LezOutput, LezError> {
+) -> LezResult {
     // BFS runs INSIDE the zkVM — the proof covers the entire graph traversal
-    let player_commitment = sha256(player.id());
+    let player_commitment = sha256(&player.account.id);
+
+    // Deserialize owner_commitment from each tile (first 32 bytes)
     let owned_tiles: Vec<_> = tiles.iter()
-        .filter(|t| t.data().owner_commitment == player_commitment)
+        .filter(|t| {
+            let commitment: [u8; 32] = t.account.data[..32].try_into().unwrap();
+            commitment == player_commitment
+        })
         .collect();
 
     let max_component = bfs_max_component(&owned_tiles);
 
     if max_component < min_connected as usize {
-        return Err(LezError::Custom(3)); // not enough connected tiles
+        return Err(LezError::Custom(6003)); // not enough connected tiles
     }
 
     let post_states: Vec<_> = tiles.into_iter()
-        .map(AccountPostState::new)
-        .chain(std::iter::once(AccountPostState::new(player)))
+        .map(|t| AccountPostState::new(t.account))
+        .chain(std::iter::once(AccountPostState::new(player.account.clone())))
         .collect();
     Ok(LezOutput::states_only(post_states))
 }
@@ -113,12 +122,17 @@ The BFS runs entirely inside the RISC Zero zkVM. The ZK proof proves not just th
 ```rust
 #[instruction]
 pub fn attest_islands(
-    tiles: Vec<AccountWithMetadata<TileState>>,
-    #[account(signer)] player: AccountWithMetadata<()>,
-) -> Result<LezOutput, LezError> {
-    let player_commitment = sha256(player.id());
+    tiles: Vec<AccountWithMetadata>,
+    #[account(signer)] player: AccountWithMetadata,
+) -> LezResult {
+    let player_commitment = sha256(&player.account.id);
+
+    // Deserialize owner_commitment from each tile (first 32 bytes)
     let owned: Vec<_> = tiles.iter()
-        .filter(|t| t.data().owner_commitment == player_commitment)
+        .filter(|t| {
+            let commitment: [u8; 32] = t.account.data[..32].try_into().unwrap();
+            commitment == player_commitment
+        })
         .collect();
 
     let island_count = count_connected_components(&owned);
@@ -127,8 +141,8 @@ pub fn attest_islands(
     // Verifier sees: "this player has N islands" without seeing which tiles
 
     let post_states: Vec<_> = tiles.into_iter()
-        .map(AccountPostState::new)
-        .chain(std::iter::once(AccountPostState::new(player)))
+        .map(|t| AccountPostState::new(t.account))
+        .chain(std::iter::once(AccountPostState::new(player.account.clone())))
         .collect();
     Ok(LezOutput::states_only(post_states))
 }
@@ -234,4 +248,4 @@ Use **public transactions** when:
 
 > **💡 Tip:** You can mix and match. A game might use public transactions for land claims (ownership is public) but private attestations for proving accumulated holdings (exact portfolio is private).
 
-> **⚠️ Warning:** Private transactions are CPU-intensive — the ZK proof is generated locally on your machine. For attestations with large `Vec<AccountWithMetadata<T>>` inputs (like BFS over many tiles), expect significant proving time. Design your attestation instructions to take the minimum necessary accounts.
+> **⚠️ Warning:** Private transactions are CPU-intensive — the ZK proof is generated locally on your machine. For attestations with large `Vec<AccountWithMetadata>` inputs (like BFS over many tiles), expect significant proving time. Design your attestation instructions to take the minimum necessary accounts.
