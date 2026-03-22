@@ -33,14 +33,36 @@ Combine seeds with an array:
 #[account(pda = [literal("tile"), arg("x"), arg("y")])]
 ```
 
-The derivation uses SHA-256 over all seeds concatenated (with the program ID mixed in).
+## Precise Derivation Rules
+
+Understanding the exact derivation is important when computing PDA addresses off-chain.
+
+**Each seed is zero-padded to exactly 32 bytes:**
+- String literals: UTF-8 encoded, zero-padded to 32 bytes. Strings longer than 32 bytes are truncated to 32 bytes.
+- Account IDs: already 32 bytes, no padding needed.
+- Numeric args: serialized as little-endian, zero-padded to 32 bytes.
+
+**Multi-seed derivation concatenates the padded seeds, then hashes:**
+```
+seed1_padded = seed1 || 0x00 * (32 - len(seed1))  // pad to 32 bytes
+seed2_padded = seed2 || 0x00 * (32 - len(seed2))
+
+combined_seed = SHA-256(seed1_padded || seed2_padded || ...)
+```
+The combined seed is a single 32-byte value.
+
+**Program ID format**: The program ID used in PDA derivation is a `[u32; 8]` — the RISC Zero ImageID as eight 32-bit words, not a flat `[u8; 32]`. This is important when computing PDA addresses manually in client code.
+
+**Final derivation**:
+```
+PDA = SHA-256(program_id_as_[u32;8] || combined_seed)
+```
 
 ## PDA Usage Example: Per-User State
 
 Mapping equivalent: `mapping(address => PlayerState) players`
 
 ```rust
-#[derive(BorshSerialize, BorshDeserialize, Default, Clone)]
 pub struct PlayerState {
     pub tile_count: u64,
     pub joined_at: u64,
@@ -51,9 +73,10 @@ pub fn join(
     #[account(init, pda = account("player"))] player_state: AccountWithMetadata<PlayerState>,
     #[account(signer)] player: AccountWithMetadata<()>,
 ) -> Result<LezOutput, LezError> {
-    let mut state = PlayerState::default();
-    state.joined_at = 0; // set timestamp if available
-    state.tile_count = 0;
+    let state = PlayerState {
+        tile_count: 0,
+        joined_at: 0,
+    };
 
     let updated = player_state.with_data(state);
     Ok(LezOutput::states_only(vec![
@@ -71,7 +94,6 @@ From the logos-land program — each hex tile is a PDA keyed by `(x, y)` coordin
 
 ```rust
 // Hex tile state
-#[derive(BorshSerialize, BorshDeserialize, Default, Clone)]
 pub struct TileState {
     pub owner_commitment: [u8; 32], // SHA256 of owner pubkey (for privacy)
     pub claimed_at: u64,
@@ -111,22 +133,51 @@ This ensures negative coordinates don't cause issues with seed derivation.
 
 ## Computing PDAs Manually
 
-If you need to compute a PDA address off-chain (e.g., for a client):
+If you need to compute a PDA address off-chain (e.g., for a client), you must match the exact on-chain derivation: pad each seed to 32 bytes, hash the concatenation, then hash with the program ID.
 
 ```rust
 use sha2::{Sha256, Digest};
 
-fn derive_pda(program_id: &[u8; 32], seeds: &[&[u8]]) -> [u8; 32] {
+/// Pad a seed to exactly 32 bytes (truncate if longer)
+fn pad_seed(seed: &[u8]) -> [u8; 32] {
+    let mut padded = [0u8; 32];
+    let len = seed.len().min(32);
+    padded[..len].copy_from_slice(&seed[..len]);
+    padded
+}
+
+/// Derive a PDA from a program ID (as [u32; 8]) and a list of seeds
+fn derive_pda(program_id: &[u32; 8], seeds: &[&[u8]]) -> [u8; 32] {
+    // Step 1: if multiple seeds, hash their concatenation into one 32-byte seed
+    let combined_seed: [u8; 32] = if seeds.len() == 1 {
+        pad_seed(seeds[0])
+    } else {
+        let mut hasher = Sha256::new();
+        for seed in seeds {
+            hasher.update(pad_seed(seed));
+        }
+        hasher.finalize().into()
+    };
+
+    // Step 2: hash program_id (as bytes) + combined_seed
     let mut hasher = Sha256::new();
-    hasher.update(program_id);
-    for seed in seeds {
-        hasher.update(seed);
+    for word in program_id {
+        hasher.update(word.to_le_bytes());
     }
+    hasher.update(combined_seed);
     hasher.finalize().into()
 }
 
 // Example: derive tile PDA for (x=5, y=3)
+let program_id: [u32; 8] = COUNTER_IMAGE_ID; // from your compiled program
+
 let x: u64 = to_seed(5);
 let y: u64 = to_seed(3);
-let pda = derive_pda(&PROGRAM_ID, &[b"tile", &x.to_le_bytes(), &y.to_le_bytes()]);
+
+let pda = derive_pda(
+    &program_id,
+    &[b"tile", &x.to_le_bytes(), &y.to_le_bytes()],
+);
 ```
+
+> **💡 Tip:** When debugging PDA mismatches, log both the expected address (computed off-chain) and the actual address (from the sequencer or a known transaction). A mismatch usually means the seed encoding or padding differs.

@@ -84,6 +84,53 @@ Your wallet computes the view tag for each transaction and compares it to the st
 
 This gives efficient wallet scanning without revealing which transactions are yours to observers.
 
+## Public/Private Interoperability
+
+This is one of LEZ's most important differentiators: **a single transaction can mix public and private accounts freely**. Private accounts can call public programs. Public accounts can interact with private accounts. A single instruction can operate on both simultaneously.
+
+> **🔄 Coming from Solidity?** This doesn't exist anywhere in the EVM ecosystem. Zcash has two separate worlds — the shielded pool and the transparent pool — with a "shielding" operation to move between them. Tornado Cash is a mixer: you deposit publicly, withdraw privately through an intermediary. Neither can mix public and private state in a single atomic transaction. LEZ can.
+
+Compare the models:
+
+| System | Private ↔ Public interop |
+|---|---|
+| Zcash | Separate pools. "Shielding" tx to cross. |
+| Tornado Cash | Deposit public → pool → withdraw private. No atomic mixing. |
+| Aztec | Separate L2. Bridge required. |
+| **LEZ** | **Single tx, mixed accounts. Atomic.** |
+
+### A Real Mixed Example: DeFi Liquidity Pool
+
+Consider a public liquidity pool program:
+- The **pool account** is public — total liquidity, prices, and pool state are on-chain and visible to all
+- A **depositor's wallet** is a private account — balance and identity are hidden
+
+A single privacy-preserving transaction can:
+1. Debit the depositor's private account (hidden amount)
+2. Credit the public pool (visible pool state update)
+3. Mint LP tokens to another private account (hidden balance)
+
+What the world sees: the pool grew. By how much? Visible. Who deposited? Hidden. What they got back? Hidden.
+
+```rust
+// Mixed-visibility deposit
+wallet.send_privacy_preserving_tx(
+    vec![
+        PrivacyPreservingAccount::Public(pool_account_id),        // pool visible
+        PrivacyPreservingAccount::PrivateOwned(depositor_id),     // depositor hidden
+        PrivacyPreservingAccount::PrivateForeign { npk, vpk },    // LP token recipient hidden
+    ],
+    deposit_instruction_data,
+    &pool_program_with_deps,
+).await?;
+```
+
+The program code doesn't change — it receives `AccountWithMetadata<T>` for all accounts, public or private. The visibility is set by the wallet based on which accounts are private vs public.
+
+### Why Per-Account Visibility Enables This
+
+The visibility mask is set **per account**, not per transaction. This is what makes mixing possible.
+
 ## Visibility Mask
 
 Each account in a privacy-preserving transaction has a visibility level encoded as a small integer:
@@ -252,6 +299,53 @@ wallet.send_privacy_preserving_tx(
 
 The counter increments privately. No one on-chain knows the account address, who called it, or what the new count is.
 
+## Privacy Security Model
+
+Understanding exactly what is and isn't hidden:
+
+| What | Visible? | Notes |
+|---|---|---|
+| Program being called | ✅ Always | `program_id` is always on-chain |
+| Public account addresses | ✅ Always | Part of the transaction message |
+| Public account state | ✅ Always | `public_post_states` in plaintext |
+| Private account addresses | ❌ Hidden | Only commitments on-chain |
+| Private account balances | ❌ Hidden | Encrypted in `encrypted_private_post_states` |
+| Private account data | ❌ Hidden | Encrypted for recipient's `vpk` |
+| Transfer amount (priv→priv) | ❌ Hidden | Inside the ZK proof |
+| Transfer amount (pub→priv) | ❌ Hidden | The delta on the private side is hidden |
+| Merkle tree root | ✅ Always | In `CommitmentSetDigest` — proves your commitment exists |
+| Nullifier | ✅ Always | Proves you spent a commitment — but not which one |
+
+The ZK proof attests to: "a valid commitment in the current tree was consumed, a valid new commitment was created, and the balance was conserved." The sequencer verifies the proof without learning which commitment was spent.
+
+### What ZK Does NOT Hide
+
+The **program being called** is always public. If you call a "private vote" program, everyone on-chain knows someone voted — just not who. This is a fundamental property of the account model: program execution is public metadata.
+
+If you need to hide which program was called, that requires a different architecture entirely (and no blockchain does this today without significant tradeoffs).
+
+> **⚠️ Warning:** The number of private accounts in a transaction may be visible from transaction size metadata. Be aware of correlation attacks based on transaction shape — two txs with the same structure may be linkable even if content is hidden.
+
+## Troubleshooting Private Transactions
+
+**"Proof generation failed"**
+- Your program panicked inside the zkVM. Test with public accounts first using `lez-cli` to validate the logic, then switch to private.
+
+**"Nullifier already exists"**
+- You tried to spend the same commitment twice. Run `wallet account sync-private` to refresh your local state — your wallet may have a stale view of which commitments you've spent.
+
+**"Commitment not in tree"**
+- You haven't run `wallet auth-transfer init` for this account, or you ran it on a different network than you're now querying. The commitment must exist in the tree before it can be spent.
+
+**"Stale Merkle proof"**
+- The commitment tree has advanced since you last synced. Run `wallet account sync-private` and retry.
+
+**"Cannot sign for private account"**
+- You're using `lez-cli` to call an instruction that touches a private account. Switch to the wallet Rust API. `lez-cli` can only sign for public accounts.
+
+**"Invalid balance conservation"**
+- Your program's logic doesn't preserve total balance across all accounts. The privacy circuit checks that `sum(inputs) == sum(outputs)`. Fees, if any, are deducted from balance explicitly.
+
 ## Critical Notes
 
 - **Private transfers generate ZK proofs locally** — this is CPU-intensive. Expect seconds to minutes depending on your hardware.
@@ -261,3 +355,42 @@ The counter increments privately. No one on-chain knows the account address, who
 - **Sync before spend** — `wallet account sync-private` fetches fresh Merkle proofs. Stale proofs cause failed transactions.
 
 > **💡 Tip:** The fact that the same binary works for both public and private txs has a profound implication: you test your program logic with simple public transactions, then deploy to production where users can choose to use it privately. No separate privacy testing surface.
+
+> **💡 Tip:** Share only your `npk` and `vpk` to receive private funds. Keep your `nsk` offline — it's the key that can spend all your private commitments. There is no recovery mechanism if `nsk` is lost.
+
+## Designing Programs for Privacy
+
+When writing programs that will be used with private accounts, a few design considerations:
+
+### Avoid On-Chain Leakage Through Public Side-Channels
+
+If your program emits an event log or updates a public counter every time a private transfer occurs, you've leaked timing metadata. Anyone watching the public counter can infer when private activity happened. Prefer designs where private-only paths have **no public state changes** unless that's intentional (e.g., a public liquidity pool where the deposit amount is private but the pool size is public by design).
+
+### Program Logic Must Be Balance-Conserving
+
+The privacy circuit enforces `sum(input balances) == sum(output balances)` across all accounts in the transaction. Your program logic must not create or destroy balance — only move it. If your program charges a fee, it must explicitly credit a fee account:
+
+```rust
+// ❌ Wrong — balance disappears into the void
+let sender_new_balance = sender.balance() - amount - fee;
+let receiver_new_balance = receiver.balance() + amount;
+
+// ✅ Correct — fee goes somewhere explicit
+let sender_new_balance = sender.balance() - amount - fee;
+let receiver_new_balance = receiver.balance() + amount;
+let fee_collector_new_balance = fee_collector.balance() + fee;
+// All three accounts must be in post_states
+```
+
+### Keep State Minimal in Private Accounts
+
+Private account data is encrypted and stored on-chain. Every byte costs. Keep your state struct small. Large `Vec<T>` fields in private account state are expensive — prefer splitting complex state across multiple accounts with PDAs.
+
+### The `data` Field in Commitments
+
+The commitment formula includes `SHA256(data)` — the hash of your account's data field. This means:
+- Changing any field in your state struct changes the commitment
+- The commitment hides the actual data, but attests to it cryptographically
+- Your program logic in the zkVM sees the plaintext `data` — it's decrypted locally before the proof is generated
+
+This design means your program code doesn't need to know anything about encryption. It operates on plaintext. The privacy circuit handles the encryption/decryption boundary.

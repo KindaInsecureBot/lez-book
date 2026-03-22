@@ -15,7 +15,7 @@ From our real `balance-attestation` program:
 **What it proves**: caller's private token balance ≥ threshold
 **What it reveals**: nothing (not the actual balance, not the account address)
 
-The program:
+> **⚠️ Note on serialization:** The code below shows the logical structure. In practice, `TokenBalance` uses manual serialization (not `borsh_derive`) because `borsh_derive` proc macros don't compile for the `riscv32im` guest target. See the Accounts & State chapter for the manual serialization pattern.
 
 ```rust
 #[lez_program]
@@ -42,10 +42,10 @@ mod balance_attestation {
 ```
 
 When run as a privacy-preserving transaction:
-- The `balance_account` is decrypted by the privacy circuit
+- The `balance_account` is decrypted by the privacy circuit locally in the wallet
 - Your program checks `balance >= threshold`
 - If true, a ZK proof is generated: "this program ran successfully on this private state"
-- The proof goes on-chain; the balance never appears anywhere
+- The proof goes on-chain; the actual balance never appears anywhere
 
 ## Real Example: logos-land Attestations
 
@@ -62,14 +62,14 @@ pub fn attest_ownership(
     y: u64,
 ) -> Result<LezOutput, LezError> {
     let state = tile.data();
-    // Owner stored as SHA256(pubkey) for privacy
+    // Owner stored as SHA256(pubkey) for privacy — compare commitment
     let owner_commitment = sha256(player.id());
 
     if state.owner_commitment != owner_commitment {
         return Err(LezError::Custom(2)); // not the owner
     }
 
-    // Prove ownership without revealing pubkey-tile link
+    // Proof: "player owns this tile" — without revealing which pubkey owns which tile
     Ok(LezOutput::states_only(vec![
         AccountPostState::new(tile),
         AccountPostState::new(player),
@@ -86,9 +86,10 @@ pub fn attest_connected(
     #[account(signer)] player: AccountWithMetadata<()>,
     min_connected: u64,
 ) -> Result<LezOutput, LezError> {
-    // BFS runs INSIDE the zkVM — proof generation includes the graph traversal
+    // BFS runs INSIDE the zkVM — the proof covers the entire graph traversal
+    let player_commitment = sha256(player.id());
     let owned_tiles: Vec<_> = tiles.iter()
-        .filter(|t| t.data().owner_commitment == sha256(player.id()))
+        .filter(|t| t.data().owner_commitment == player_commitment)
         .collect();
 
     let max_component = bfs_max_component(&owned_tiles);
@@ -105,7 +106,7 @@ pub fn attest_connected(
 }
 ```
 
-Note: The BFS runs entirely inside the RISC Zero zkVM. The ZK proof proves not just the final result but the entire computation.
+The BFS runs entirely inside the RISC Zero zkVM. The ZK proof proves not just the final result but the entire computation — including every step of the graph traversal.
 
 **3. attest_islands** — count connected components:
 
@@ -115,8 +116,9 @@ pub fn attest_islands(
     tiles: Vec<AccountWithMetadata<TileState>>,
     #[account(signer)] player: AccountWithMetadata<()>,
 ) -> Result<LezOutput, LezError> {
+    let player_commitment = sha256(player.id());
     let owned: Vec<_> = tiles.iter()
-        .filter(|t| t.data().owner_commitment == sha256(player.id()))
+        .filter(|t| t.data().owner_commitment == player_commitment)
         .collect();
 
     let island_count = count_connected_components(&owned);
@@ -138,31 +140,85 @@ The execution flow for an attestation:
 
 ```
 1. User submits: program_id + instruction + encrypted private accounts
-2. Privacy circuit decrypts accounts
-3. Your program instruction runs with decrypted data
-4. If instruction succeeds, output = "attestation valid"
-5. ZK proof generated covering steps 2-4
-6. Proof submitted to sequencer
-7. Sequencer verifies proof, records attestation on-chain
+2. Wallet decrypts accounts locally using nsk
+3. Privacy circuit + your program run together in the zkVM
+4. Your instruction executes with decrypted data
+5. If instruction succeeds → attestation valid
+6. ZK proof generated: covers decryption, your logic, and privacy constraints
+7. Proof submitted to sequencer
+8. Sequencer verifies proof, records attestation on-chain
 ```
 
-Your code is step 3. Everything else is the protocol.
+Your code is step 4. Everything else is the protocol.
 
-## The Rust API for Private Transactions
+## Working Setup: Running Private Attestations
+
+`lez-cli` cannot sign for private accounts — you must use the wallet Rust API. Here is a complete working workflow:
+
+```bash
+# 1. Build lssa from the main branch
+#    NOTE: do NOT use commit 767b5af — it has a broken commitment RPC
+cd ~/lssa
+git checkout main
+cargo build --release \
+  -p sequencer_runner \
+  -p wallet \
+  --features standalone \
+  --jobs 2
+
+# 2. Clean any stale state and start the sequencer
+rm -rf rocksdb/
+./target/release/sequencer_runner sequencer_runner/configs/debug &
+
+# 3. Create a private account and initialize its commitment
+wallet account new private
+# Output: Private/ABC123...
+
+wallet auth-transfer init --account-id Private/ABC123...
+
+# 4. Wait for the init tx to land, then sync
+sleep 15
+wallet account sync-private
+
+# 5. Fund the private account from a genesis account
+wallet auth-transfer send \
+  --from Private/E8Hwi... \
+  --to Private/ABC123... \
+  --amount 1000
+
+# 6. Sync again to pick up the incoming transfer
+wallet account sync-private
+
+# 7. Deploy your program
+lez-cli deploy --program ./target/riscv-guest/release/balance_attestation
+
+# 8. Run the attestation via wallet Rust API (see below)
+```
+
+In your client code:
 
 ```rust
-// From wallet/client code
-use lssa_client::WalletClient;
+use nssa::program::Program;
+use nssa::privacy_preserving_transaction::circuit::ProgramWithDependencies;
 
-let client = WalletClient::new("http://localhost:3040");
+// Load program binary
+let bytecode = std::fs::read("target/riscv-guest/release/balance_attestation")?;
+let program = Program::new(bytecode)?;
+let program_with_deps = ProgramWithDependencies::from(program);
 
-client.send_privacy_preserving_tx(
-    &program_id,
-    "attest_balance",
-    accounts,          // encrypted
-    &args_bytes,       // borsh-encoded args
-    visibility_mask,   // which outputs to encrypt
+// instruction_index 0 = attest_balance, threshold = 500
+let instruction_data = risc0_zkvm::serde::to_vec(&(0u32, 500u64))?;
+
+let result = wallet.send_privacy_preserving_tx(
+    vec![
+        PrivacyPreservingAccount::PrivateOwned(balance_account_id),
+        PrivacyPreservingAccount::PrivateOwned(player_account_id),
+    ],
+    instruction_data,
+    &program_with_deps,
 ).await?;
+
+println!("Attestation tx: {:?}", result);
 ```
 
 ## When to Use Attestations vs Public Transactions
@@ -177,3 +233,5 @@ Use **public transactions** when:
 - Example: claiming a tile in a game where ownership is meant to be public
 
 > **💡 Tip:** You can mix and match. A game might use public transactions for land claims (ownership is public) but private attestations for proving accumulated holdings (exact portfolio is private).
+
+> **⚠️ Warning:** Private transactions are CPU-intensive — the ZK proof is generated locally on your machine. For attestations with large `Vec<AccountWithMetadata<T>>` inputs (like BFS over many tiles), expect significant proving time. Design your attestation instructions to take the minimum necessary accounts.
