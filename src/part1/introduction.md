@@ -2,15 +2,20 @@
 
 LEZ is a privacy-native smart contract platform where every program execution generates a zero-knowledge proof. It gives you the programmability of a smart contract system and the privacy of a ZK circuit — without requiring you to write a ZK circuit.
 
-**LEZ** stands for **Logos Execution Zone**. It is the execution layer of the **Logos Network** (logos.co) — a decentralized governance and infrastructure stack built by IFT (Institute of Free Technology). Formally, LEZ is part of the **NSSA** (Nondeterministic State Sequencer Architecture) stack.
+**LEZ** stands for **Logos Execution Zone** — one instantiation of the execution layer deployed for the **Logos Network** (logos.co), a decentralized governance and infrastructure stack built by IFT (Institute of Free Technology).
 
-**Logos ecosystem context:**
-- **Logos Network** — decentralized governance and infrastructure stack (logos.co)
-- **IFT** — Institute of Free Technology, the organization building Logos
-- **LEZ** — the smart contract execution layer of Logos
-- **NSSA** — the underlying sequencer architecture that LEZ runs on
+The naming history helps make sense of the acronyms you'll encounter:
+- The project started as **Nescience** (privacy-first execution)
+- The architecture became **NSSA** — originally "Nescience State Separation Architecture", later rebranded as **LSSA** (Logos State Separation Architecture)
+- The execution environment was named **LEE** (Logos Execution Environment)
+- **LEZ** (Logos Execution Zone) is the specific zone instantiation deployed by Logos
+
+In practice, the terms you'll see daily:
+- **LEZ** — the smart contract execution zone you're building for
+- **NSSA/LSSA** — the underlying sequencer architecture (the `lssa` binary still uses this name)
+- **LEE** — the execution environment spec that LEZ implements
 - **SPEL** — the Rust macro framework for writing LEZ programs (github.com/logos-co/spel)
-- **lssa** — the local sequencer + wallet for development (github.com/logos-blockchain/lssa)
+- **lssa** — the sequencer + wallet software (github.com/logos-blockchain/lssa)
 
 > **💡 Tip:** If you're evaluating LEZ for a project, the mental model chapter is the fastest way to understand where it fits relative to tools you already know.
 
