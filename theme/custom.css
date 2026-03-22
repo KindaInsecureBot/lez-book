@@ -1,0 +1,60 @@
+/* LEZ Book — custom theme tweaks */
+
+/* Slightly wider content on large screens */
+.content {
+    max-width: 860px;
+}
+
+/* Callout box base style */
+blockquote {
+    border-left: 4px solid #4a9eff;
+    background-color: rgba(74, 158, 255, 0.08);
+    padding: 0.6em 1em;
+    margin: 1.2em 0;
+    border-radius: 0 4px 4px 0;
+}
+
+/* Warning boxes */
+blockquote:has(strong:first-child):has(strong:contains("⚠️")) {
+    border-left-color: #f0a500;
+    background-color: rgba(240, 165, 0, 0.08);
+}
+
+/* Tip boxes */
+blockquote:has(strong:first-child):has(strong:contains("💡")) {
+    border-left-color: #28a745;
+    background-color: rgba(40, 167, 69, 0.08);
+}
+
+/* Coming from Solidity boxes */
+blockquote:has(strong:first-child):has(strong:contains("🔄")) {
+    border-left-color: #9b59b6;
+    background-color: rgba(155, 89, 182, 0.08);
+}
+
+/* Better code block styling */
+pre {
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Table improvements */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+}
+
+th {
+    background-color: rgba(74, 158, 255, 0.15);
+    font-weight: 600;
+}
+
+td, th {
+    padding: 0.5em 0.75em;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+tr:nth-child(even) {
+    background-color: rgba(255, 255, 255, 0.03);
+}

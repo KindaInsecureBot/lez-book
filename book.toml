@@ -1,0 +1,16 @@
+[book]
+title = "LEZ Development Guide"
+description = "A comprehensive guide for EVM/Solidity developers transitioning to LEZ/SPEL"
+authors = ["Kibby"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/KindaInsecureBot/lez-book"
+edit-url-template = "https://github.com/KindaInsecureBot/lez-book/edit/main/{path}"
+additional-css = ["theme/custom.css"]
