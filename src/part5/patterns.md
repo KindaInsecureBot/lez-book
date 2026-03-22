@@ -64,7 +64,7 @@ pub fn admin_action(
 }
 ```
 
-`#[account(owner = MY_PROGRAM_ID)]` checks that the account was created by your program. The additional manual check on `config.data().admin` verifies that the specific caller is the designated admin.
+`#[account(owner = MY_PROGRAM_ID)]` checks that the account was created by your program. The additional manual check on `config_state.admin` (deserialized from raw bytes) verifies that the specific caller is the designated admin.
 
 > **🔄 Coming from Solidity?** In Solidity, `onlyOwner` is a modifier on the contract. In LEZ, "ownership" has two layers: the account's `program_owner` (which program created it) and your application-level admin stored in the account data. Check both as needed.
 

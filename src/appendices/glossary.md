@@ -98,7 +98,7 @@ The Rust library crate that provides the core types and traits for writing LEZ p
 
 ## LEZ
 
-Lollipop EVM Zero-knowledge (or Lollipop ZK, depending on context). A privacy-native ZK smart contract platform. LEZ programs are compiled to RISC Zero guest binaries, executed in a zkVM, and verified by the `lssa` sequencer. Privacy is a first-class feature: private (shielded) accounts use commitments and nullifiers to enable confidential state transitions without revealing account contents.
+Logos Execution Zone. The privacy-native ZK smart contract execution layer of the Logos Network (logos.co), built by IFT (Institute of Free Technology). A privacy-native ZK smart contract platform. LEZ programs are compiled to RISC Zero guest binaries, executed in a zkVM, and verified by the `lssa` sequencer. Privacy is a first-class feature: private (shielded) accounts use commitments and nullifiers to enable confidential state transitions without revealing account contents.
 
 ---
 
