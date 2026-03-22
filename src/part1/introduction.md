@@ -6,7 +6,7 @@ LEZ is a privacy-native smart contract platform where every program execution ge
 
 The naming history helps make sense of the acronyms you'll encounter:
 - The project started as **Nescience** (privacy-first execution)
-- The architecture became **NSSA** — originally "Nescience State Separation Architecture", later rebranded as **LSSA** (Logos State Separation Architecture)
+- The architecture became **NSSA** — "Nondeterministic State Sequencer Architecture", later rebranded as **LSSA** (Logos State Sequencer Architecture)
 - The execution environment was named **LEE** (Logos Execution Environment)
 - **LEZ** (Logos Execution Zone) is the specific zone instantiation deployed by Logos
 

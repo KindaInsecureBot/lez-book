@@ -98,7 +98,7 @@ The Rust library crate that provides the core types and traits for writing LEZ p
 
 ## LEZ
 
-Logos Execution Zone — a specific instantiation of the LEE (Logos Execution Environment) deployed by the Logos Network. The project evolved from Nescience → NSSA (Nescience State Separation Architecture) → LSSA (Logos SSA) → LEE → LEZ. The privacy-native ZK smart contract execution layer of the Logos Network (logos.co), built by IFT (Institute of Free Technology). LEZ programs are compiled to RISC Zero guest binaries, executed in a zkVM, and verified by the `lssa` sequencer. Privacy is a first-class feature: private (shielded) accounts use commitments and nullifiers to enable confidential state transitions without revealing account contents.
+Logos Execution Zone — a specific instantiation of the LEE (Logos Execution Environment) deployed by the Logos Network. The project evolved from Nescience → NSSA (Nondeterministic State Sequencer Architecture) → LSSA (Logos SSA) → LEE → LEZ. The privacy-native ZK smart contract execution layer of the Logos Network (logos.co), built by IFT (Institute of Free Technology). LEZ programs are compiled to RISC Zero guest binaries, executed in a zkVM, and verified by the `lssa` sequencer. Privacy is a first-class feature: private (shielded) accounts use commitments and nullifiers to enable confidential state transitions without revealing account contents.
 
 ---
 
