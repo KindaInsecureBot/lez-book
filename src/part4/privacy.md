@@ -394,3 +394,7 @@ The commitment formula includes `SHA256(data)` — the hash of your account's da
 - Your program logic in the zkVM sees the plaintext `data` — it's decrypted locally before the proof is generated
 
 This design means your program code doesn't need to know anything about encryption. It operates on plaintext. The privacy circuit handles the encryption/decryption boundary.
+
+> **🔄 Coming from Solidity?** In Solidity, writing a privacy-preserving contract requires either a full ZK framework (Aztec, circom), a mixer contract (Tornado Cash), or a trusted enclave. In LEZ, privacy is the protocol's job. Your program is plain Rust with no ZK primitives. The privacy circuit wraps it at the protocol level — you opt into privacy at the call site, not in the contract code.
+
+> **💡 Tip:** Use small, focused state structs in private accounts. Every unnecessary field adds to the commitment size and proof generation time. When in doubt, split state across two accounts using PDAs — one for public metadata, one for private balances.
