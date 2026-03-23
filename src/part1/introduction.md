@@ -15,7 +15,7 @@ In practice, the terms you'll see daily:
 - **NSSA/LSSA** — the underlying sequencer architecture (the `lssa` binary still uses this name)
 - **LEE** — the execution environment spec that LEZ implements
 - **SPEL** — the Rust macro framework for writing LEZ programs (github.com/logos-co/spel)
-- **lssa** — the sequencer + wallet software (github.com/logos-blockchain/lssa)
+- **logos-execution-zone** — the sequencer + wallet software (github.com/logos-blockchain/logos-execution-zone)
 
 > **💡 Tip:** If you're evaluating LEZ for a project, the mental model chapter is the fastest way to understand where it fits relative to tools you already know.
 

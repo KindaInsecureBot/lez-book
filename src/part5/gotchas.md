@@ -114,22 +114,25 @@ If you need to compute PDA addresses programmatically (e.g., in a client), imple
 - "Commitment mismatch" errors on the first transaction after restart
 - Errors that look like valid RPC responses but with wrong content (correct JSON shape, wrong values)
 
-**Fix:** Delete the RocksDB directory before restarting `lssa`:
+**Fix:** Run `just clean` from the `~/lez` directory, then restart:
 
 ```bash
-# Stop lssa first, then:
-rm -rf rocksdb/
-
-# Or, if using a custom path configured in your sequencer config:
-rm -rf /path/to/lssa/data/rocksdb/
+cd ~/lez
+# Stop the sequencer first, then:
+just clean
 
 # Then restart
-./sequencer_runner --config sequencer_runner/configs/debug/
+just run-sequencer
+```
+
+`just clean` removes `sequencer/service/rocksdb`, `indexer/service/rocksdb`, `sequencer/service/bedrock_signing_key`, and `wallet/configs/debug/storage.json` in one step. You can also delete just the RocksDB directories manually if you want to preserve wallet storage:
+
+```bash
+rm -rf ~/lez/sequencer/service/rocksdb
+rm -rf ~/lez/indexer/service/rocksdb
 ```
 
 > **⚠️ Warning:** This deletes all sequencer state, including all accounts and commitments. On devnet this is fine. On any environment with real state, take a backup first.
-
-> **💡 Tip:** Automate this in your dev workflow. A `make reset` target that stops `lssa`, removes RocksDB, and restarts fresh will save hours of debugging. Keep it separate from `make clean` so it isn't run accidentally.
 
 ---
 
@@ -146,8 +149,9 @@ rm -rf /path/to/lssa/data/rocksdb/
 **Fix:** Use the `main` branch of `lssa` rather than pinning to `767b5af`. If you need to pin a version for reproducibility, pin to a commit after this regression was fixed:
 
 ```bash
-# In your lssa build/install process, use main or a known-good commit
-git clone <lssa-repo>
+# In your logos-execution-zone build/install process, use main or a known-good commit
+git clone https://github.com/logos-blockchain/logos-execution-zone.git ~/lez
+cd ~/lez
 git checkout main   # not 767b5af
 cargo build --release
 ```
@@ -352,26 +356,26 @@ guest_path = "guest"     # path to the guest crate relative to methods/
 
 ---
 
-## 12. `sequencer_runner` Takes a Directory Path, Not a File Path
+## 12. `sequencer_service` Takes a Config File Path, Not a Directory Path
 
-**Explanation:** The `sequencer_runner` binary expects a path to a configuration *directory*, not a path to the JSON config file itself. Passing the file path directly causes a startup error or silently uses default configuration.
+**Explanation:** The `sequencer_service` binary expects a path to the JSON config **file** via `--config`, not a path to the directory containing it. Passing a directory path causes a startup error or silently uses default configuration.
 
 **Symptoms:**
-- `sequencer_runner` exits immediately with a config parse error
-- Or `sequencer_runner` starts but uses unexpected default settings (wrong port, wrong RocksDB path)
+- `sequencer_service` exits immediately with a config parse error
+- Or `sequencer_service` starts but uses unexpected default settings (wrong port, wrong RocksDB path)
 - Config changes have no effect because the file is not being read
 
 **Fix:**
 
 ```bash
-# ❌ Wrong: path to the JSON file
-./sequencer_runner --config sequencer_runner/configs/debug/config.json
+# ❌ Wrong: path to the directory
+./sequencer_service sequencer/service/configs/debug/
 
-# ✅ Correct: path to the directory containing the config file
-./sequencer_runner --config sequencer_runner/configs/debug/
+# ✅ Correct: path to the JSON config file
+./sequencer_service --config sequencer/service/configs/debug/sequencer_config.json
 ```
 
-> **💡 Tip:** `sequencer_runner` looks for a specific filename inside the directory (e.g., `config.json` or `debug.json`). Verify which filename it expects by checking the `sequencer_runner` source or documentation for your version.
+> **💡 Tip:** Always point `--config` at the full file path, including the filename. The binary does not scan directories for config files.
 
 ---
 
@@ -414,13 +418,13 @@ Use this table to quickly map symptoms to causes and fixes.
 | Account count mismatch at sequencer | Missing accounts in `post_states` | Return all received accounts, including unmodified ones |
 | PDA address from CLI doesn't match sequencer | `lez-cli pda` bug with integer seeds | Get address from sequencer logs on first `init` call |
 | Commitment queries return empty results | `lssa` on broken revision `767b5af` | Switch to `main` branch |
-| Mysterious commitment mismatch after restart | Stale RocksDB state | `rm -rf rocksdb/` before restarting `lssa` |
+| Mysterious commitment mismatch after restart | Stale RocksDB state | `just clean` from `~/lez` before restarting |
 | Signature validation error with PDA signer | PDA passed where genesis account required | Use a genesis (keypair) account as signer |
 | `init, mut` constraint conflict | Redundant constraint combination | Use only `#[account(init)]` |
 | Macro error pointing at wrong line | Accounts and args out of order | Put all `AccountWithMetadata` params before scalar args |
 | `--players-account` flag not recognized | Wrong flag format for rest accounts | Use `--players addr1,addr2` (no `-account` suffix) |
 | Guest binary not produced by build | Missing risc0 metadata in `methods/Cargo.toml` | Add `[[package.metadata.risc0.methods]]` section |
-| `sequencer_runner` ignores config changes | Passing file path instead of directory | Pass directory path to `--config` |
+| `sequencer_service` ignores config changes | Passing directory instead of file path | Pass the JSON file path to `--config`, e.g. `--config sequencer/service/configs/debug/sequencer_config.json` |
 | Link errors after dependency change | Stale `target/riscv-guest/` | `rm -rf target/riscv-guest/` and rebuild |
 | Account data zeroed after successful tx | `lssa` commitment RPC bug (`767b5af`) | Upgrade `lssa` to `main` branch |
 | Signer check passes when it shouldn't | PDA silently bypasses signer constraint | Audit: ensure signer accounts are genesis accounts |

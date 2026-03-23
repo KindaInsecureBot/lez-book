@@ -309,8 +309,8 @@ Open a second terminal for the sequencer if it isn't already running:
 
 ```bash
 # Terminal 1 — keep running
-cd ~/lssa
-./target/release/sequencer_runner sequencer_runner/configs/debug/ &
+cd ~/lez
+RUST_LOG=info RISC0_DEV_MODE=1 ./target/release/sequencer_service --config sequencer/service/configs/debug/sequencer_config.json &
 ```
 
 In your project terminal:

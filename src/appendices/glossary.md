@@ -122,7 +122,7 @@ A type alias: `Result<LezOutput, LezError>`. The required return type of every `
 
 ## lssa
 
-The NSSA sequencer daemon. `lssa` is the process that receives transactions, executes and verifies LEZ program proofs, manages the commitment tree, and provides the RPC endpoint for wallets and clients. Running a local `lssa` instance is required for development and testing. `lssa` uses RocksDB for persistent state.
+The NSSA sequencer daemon. `lssa` is the process that receives transactions, executes and verifies LEZ program proofs, manages the commitment tree, and provides the RPC endpoint for wallets and clients. Running a local `lssa` instance is required for development and testing. `lssa` uses RocksDB for persistent state. The source code lives at github.com/logos-blockchain/logos-execution-zone (clone as `~/lez`).
 
 > **🔄 Coming from Solidity?** Analogous to a blockchain node (like `geth` or `anvil`). `lssa` is the runtime that executes your programs and maintains the canonical state.
 
@@ -188,9 +188,9 @@ The RISC Zero toolchain installer. Installs and manages the `riscv32im-risc0-zkv
 
 ---
 
-## sequencer_runner
+## sequencer_service
 
-The binary that starts and runs the `lssa` sequencer daemon. Takes a configuration directory path (not a config file path) via `--config`. Manages the RocksDB state store, listens for incoming transactions, verifies proofs, and maintains the commitment tree. For development, use `sequencer_runner --config sequencer_runner/configs/debug/`.
+The binary that starts and runs the `lssa` sequencer daemon. Takes a configuration directory path (not a config file path) via `--config`. Manages the RocksDB state store, listens for incoming transactions, verifies proofs, and maintains the commitment tree. For development, use `sequencer_service --config sequencer/service/configs/debug/`.
 
 ---
 

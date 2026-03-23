@@ -170,19 +170,19 @@ Your code is step 4. Everything else is the protocol.
 `lez-cli` cannot sign for private accounts — you must use the wallet Rust API. Here is a complete working workflow:
 
 ```bash
-# 1. Build lssa from the main branch
+# 1. Build logos-execution-zone from the main branch
 #    NOTE: do NOT use commit 767b5af — it has a broken commitment RPC
-cd ~/lssa
+cd ~/lez
 git checkout main
 cargo build --release \
-  -p sequencer_runner \
+  -p sequencer_service \
   -p wallet \
   --features standalone \
   --jobs 2
 
 # 2. Clean any stale state and start the sequencer
 rm -rf rocksdb/
-./target/release/sequencer_runner sequencer_runner/configs/debug &
+RUST_LOG=info RISC0_DEV_MODE=1 ./target/release/sequencer_service --config sequencer/service/configs/debug/sequencer_config.json &
 
 # 3. Create a private account and initialize its commitment
 wallet account new private
