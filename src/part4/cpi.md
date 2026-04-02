@@ -90,7 +90,7 @@ The swap program updates the pool reserve ratios, then chains a call to the toke
 When calling a program via CPI, the sequencer needs the binary of the called program to execute and prove it. The `--bin-<name>` flag provides the guest binary and automatically fills in the corresponding `--<name>-program-id`:
 
 ```bash
-lez-cli call --idl swap.json \
+spel call --idl swap.json \
   --instruction swap \
   --bin-token-program ./target/riscv-guest/release/token_program \
   --pool <pool-addr> \

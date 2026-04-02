@@ -73,7 +73,7 @@ discriminator = SHA256("global:" || instruction_name)[0..8]
 
 For `"initialize"`: `SHA256("global:initialize")` → first 8 bytes = `[175, 175, 109, 31, 13, 152, 155, 237]`
 
-The discriminator is used by lez-cli and client code to identify which instruction to call. It's the LEZ equivalent of Solidity's 4-byte function selector.
+The discriminator is used by spel and client code to identify which instruction to call. It's the LEZ equivalent of Solidity's 4-byte function selector.
 
 ## How the IDL Is Generated
 
@@ -99,17 +99,17 @@ cargo run --release -p idl-gen > counter.json
 
 ## Never Edit by Hand
 
-> **⚠️ Warning:** Never manually edit the IDL file. It's generated from your Rust code. If the IDL and your Rust code get out of sync, lez-cli will encode arguments incorrectly and you'll get mysterious failures. Always regenerate after changing your program.
+> **⚠️ Warning:** Never manually edit the IDL file. It's generated from your Rust code. If the IDL and your Rust code get out of sync, spel will encode arguments incorrectly and you'll get mysterious failures. Always regenerate after changing your program.
 
-## How lez-cli Uses the IDL
+## How spel Uses the IDL
 
 When you run:
 
 ```bash
-lez-cli call --idl counter.json --instruction increment --counter <addr> --caller <addr>
+spel call --idl counter.json --instruction increment --counter <addr> --caller <addr>
 ```
 
-lez-cli reads the IDL to know:
+spel reads the IDL to know:
 
 - Which arguments the instruction expects
 - How to borsh-encode them
@@ -117,12 +117,12 @@ lez-cli reads the IDL to know:
 - The program ID to send the transaction to
 - The discriminator to identify the instruction
 
-## How lez-client-gen Uses the IDL
+## How spel-client-gen Uses the IDL
 
-`lez-client-gen` reads the IDL to generate typed client code:
+`spel-client-gen` reads the IDL to generate typed client code:
 
 ```bash
-lez-client-gen --idl counter.json --out-dir ./client
+spel-client-gen --idl counter.json --out-dir ./client
 ```
 
 This generates Rust client code with typed function calls for each instruction. See the Client Code Generation chapter for details.

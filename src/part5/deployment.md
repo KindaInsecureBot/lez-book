@@ -24,16 +24,16 @@ Work through this list before running `make deploy`. Each item has caused real d
   `borsh_derive` does not compile for `riscv32im`. Audit your guest crate's `Cargo.toml` and all dependencies for proc-macro crates. All borsh serialization in guest code must be implemented manually.
 
 - [ ] **PDA seeds verified against actual sequencer-assigned addresses**
-  If your program uses integer seeds (u64, u128), `lez-cli pda` may produce wrong addresses. Verify PDA addresses against sequencer logs from a test `init` call before hardcoding them anywhere.
+  If your program uses integer seeds (u64, u128), `spel pda` may produce wrong addresses. Verify PDA addresses against sequencer logs from a test `init` call before hardcoding them anywhere.
 
 - [ ] **Error codes defined (starting at 6000+)**
   Custom error codes must start at 6000 to avoid collision with framework error codes (1000–1999). Verify all `LezError::Custom(...)` values in your program use codes >= 6000.
 
 - [ ] **IDL generated and reviewed**
-  Run `make idl` and open the generated JSON. Verify instruction names, account names, argument types, and account ordering match your program. The IDL is what clients and `lez-cli` use to call your program — a wrong IDL means broken clients.
+  Run `make idl` and open the generated JSON. Verify instruction names, account names, argument types, and account ordering match your program. The IDL is what clients and `spel` use to call your program — a wrong IDL means broken clients.
 
 - [ ] **`methods/Cargo.toml` has `[[package.metadata.risc0.methods]]` section**
-  The `lez-cli init` scaffold omits this section. Without it, the build may succeed without producing the correct guest binary. Confirm the section exists and the `name` and `guest_path` fields are correct.
+  The `spel init` scaffold omits this section. Without it, the build may succeed without producing the correct guest binary. Confirm the section exists and the `name` and `guest_path` fields are correct.
 
 - [ ] **`target/riscv-guest/` cleaned after any dependency changes**
   Stale artifacts cause hard-to-diagnose link errors. If you changed any dependencies since the last clean build, run `rm -rf target/riscv-guest/` before building for deployment.
@@ -75,7 +75,7 @@ The IDL is a JSON schema describing all instructions, accounts, and argument typ
 ```bash
 make inspect
 # or
-lez-cli inspect --program ./target/riscv-guest/my_program.elf
+spel inspect --program ./target/riscv-guest/my_program.elf
 ```
 
 This outputs the ImageID in three formats:
@@ -100,7 +100,7 @@ This creates a program account on `lssa`. Run this once for a new program. Runni
 Under the hood, this calls something like:
 
 ```bash
-lez-cli setup --program-id <image-id> --authority-account <genesis-addr>
+spel setup --program-id <image-id> --authority-account <genesis-addr>
 ```
 
 ### Deploy: Register the ImageID
@@ -114,7 +114,7 @@ This registers your program's ImageID with the sequencer, making it callable. Af
 If you need to deploy manually (e.g., with a different key):
 
 ```bash
-lez-cli deploy \
+spel deploy \
   --program ./target/riscv-guest/my_program.elf \
   --program-id <image-id> \
   --authority-account <genesis-addr>
@@ -129,7 +129,7 @@ After deploying, verify the program is registered and callable before announcing
 ### Check Program Is Registered
 
 ```bash
-lez-cli inspect --program-id <image-id>
+spel inspect --program-id <image-id>
 ```
 
 A successful response confirms the sequencer knows about your program. If this fails, the deploy did not complete successfully.
@@ -141,7 +141,7 @@ Most programs have an `initialize` instruction that sets up global state. Call i
 ```bash
 make cli ARGS="initialize --authority-account <genesis-addr>"
 # or directly:
-lez-cli call \
+spel call \
   --idl program.json \
   --instruction initialize \
   --authority-account <genesis-addr>
@@ -220,7 +220,7 @@ For deployments beyond local devnet, work through these additional items.
 ### Version Pinning
 
 - [ ] **Pin `lssa` revision** in your deployment scripts and documentation.
-- [ ] **Pin `lez-cli` revision** used for deployment.
+- [ ] **Pin `spel` revision** used for deployment.
 - [ ] **Record the exact build command** used to produce the deployed guest binary, including Docker image tag or `rzup` toolchain version.
 - [ ] **Store the expected ImageID** alongside your pinned versions. Verify the ImageID matches during any re-build or re-deploy.
 
@@ -245,7 +245,7 @@ Because the ImageID is immutable and tied to the exact program binary, tradition
 
 ```bash
 # Re-deploy old version from archived artifacts
-lez-cli deploy \
+spel deploy \
   --program ./archive/v1.0/my_program.elf \
   --program-id <old-image-id> \
   --authority-account <genesis-addr>

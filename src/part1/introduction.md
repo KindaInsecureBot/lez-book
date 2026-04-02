@@ -78,18 +78,18 @@ SPEL is the Rust macro layer that turns ordinary Rust code into a LEZ program. I
 
 The two main macros you'll use constantly are `#[lez_program]` and `#[instruction]`.
 
-### `lez-cli` — Developer Tooling
+### `spel` — Developer Tooling
 
-`lez-cli` is the command-line interface for building, testing, and deploying LEZ programs. It wraps the RISC Zero toolchain and `lssa` RPC calls into ergonomic commands:
+`spel` is the command-line interface for building, testing, and deploying LEZ programs. It wraps the RISC Zero toolchain and `lssa` RPC calls into ergonomic commands:
 
 ```bash
-lez-cli init my-program     # Scaffold a new program workspace
-lez-cli build               # Compile to riscv32im and generate ImageID
-lez-cli deploy              # Deploy to lssa and register the ImageID
-lez-cli call <instruction>  # Call an instruction on a deployed program
+spel init my-program     # Scaffold a new program workspace
+spel build               # Compile to riscv32im and generate ImageID
+spel deploy              # Deploy to lssa and register the ImageID
+spel call <instruction>  # Call an instruction on a deployed program
 ```
 
-The scaffolded workspace includes a `Makefile` with `make deploy` and `make cli ARGS="..."` targets so you rarely need to type full `lez-cli` invocations directly.
+The scaffolded workspace includes a `Makefile` with `make deploy` and `make cli ARGS="..."` targets so you rarely need to type full `spel` invocations directly.
 
 ---
 
@@ -130,7 +130,7 @@ Programs are written in Rust using the SPEL macro framework. A minimal program l
 #![no_main]
 use nssa_core::account::AccountWithMetadata;
 use nssa_core::program::AccountPostState;
-use lez_framework::prelude::*;
+use spel_framework::prelude::*;
 risc0_zkvm::guest::entry!(main);
 
 #[lez_program]
@@ -174,7 +174,7 @@ End-to-end, building and deploying a LEZ program looks like this:
 
 ```bash
 # 1. Scaffold
-lez-cli init my-counter
+spel init my-counter
 cd my-counter
 
 # 2. Write your program in src/lib.rs
@@ -209,7 +209,7 @@ The same `make cli` command works for both public and private transaction modes 
 | Program identity | RISC Zero ImageID |
 | Privacy | Native — same binary handles public and private |
 | Sequencer | `lssa` (validates proofs, updates state) |
-| Developer CLI | `lez-cli` |
+| Developer CLI | `spel` |
 
 LEZ is not a rollup on top of Ethereum. It is not an EVM chain with a ZK prover stapled on. It is a purpose-built platform where ZK proofs and account-based privacy are architectural primitives, not features added later.
 

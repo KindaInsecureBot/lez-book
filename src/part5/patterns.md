@@ -278,7 +278,7 @@ pub fn batch_update(
 Pass multiple accounts from the CLI with repeated `--targets` flags:
 
 ```bash
-lez-cli call --idl program.json \
+spel call --idl program.json \
   --instruction batch_update \
   --authority <addr> \
   --targets <addr1> \

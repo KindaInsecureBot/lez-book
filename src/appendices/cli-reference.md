@@ -1,16 +1,16 @@
 # Appendix A: CLI Reference
 
-This appendix documents the command-line tools available for LEZ development: `lez-cli`, `wallet`, and `lez-client-gen`. For type formats when passing arguments, see [Appendix B: Type Format Table](./type-formats.md).
+This appendix documents the command-line tools available for LEZ development: `spel`, `wallet`, and `spel-client-gen`. For type formats when passing arguments, see [Appendix B: Type Format Table](./type-formats.md).
 
 ---
 
-## lez-cli
+## spel
 
 The primary developer CLI for building, inspecting, deploying, and calling LEZ programs.
 
 ### Global Options
 
-These options apply to most `lez-cli` subcommands:
+These options apply to most `spel` subcommands:
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -21,12 +21,12 @@ These options apply to most `lez-cli` subcommands:
 
 ---
 
-### `lez-cli init <name>`
+### `spel init <name>`
 
 Scaffold a new LEZ program workspace.
 
 ```bash
-lez-cli init my_program
+spel init my_program
 ```
 
 Creates a directory `my_program/` with the standard workspace structure:
@@ -44,50 +44,50 @@ my_program/
         └── lib.rs
 ```
 
-> **⚠️ Warning:** The scaffold's `methods/Cargo.toml` is missing the `[[package.metadata.risc0.methods]]` section. Add it before building or the guest binary will not be produced. See [Gotchas #11](../part5/gotchas.md#11-lez-cli-init-scaffold-missing-risc-zero-metadata-in-methodscargotoml).
+> **⚠️ Warning:** The scaffold's `methods/Cargo.toml` is missing the `[[package.metadata.risc0.methods]]` section. Add it before building or the guest binary will not be produced. See [Gotchas #11](../part5/gotchas.md#11-spel-init-scaffold-missing-risc-zero-metadata-in-methodscargotoml).
 
 ---
 
-### `lez-cli build`
+### `spel build`
 
 Compile the program to `riscv32im-risc0-zkvm-elf`.
 
 ```bash
-lez-cli build
+spel build
 # equivalent to:
 make build
 ```
 
-Produces the guest ELF in `target/riscv-guest/`. Use `make build` for Docker-based reproducible builds. Use `lez-cli build` for local builds with the `rzup` toolchain.
+Produces the guest ELF in `target/riscv-guest/`. Use `make build` for Docker-based reproducible builds. Use `spel build` for local builds with the `rzup` toolchain.
 
 ---
 
-### `lez-cli idl`
+### `spel idl`
 
 Generate the IDL (Interface Definition Language) JSON from the compiled program.
 
 ```bash
-lez-cli idl
-lez-cli idl --out program.json
-lez-cli idl --out ./clients/program.json
+spel idl
+spel idl --out program.json
+spel idl --out ./clients/program.json
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--out <file>` | Output file path (default: `program.json` in current directory) |
 
-The IDL JSON describes all instructions, their account parameters, and argument types. Clients and `lez-cli` itself use this file to call the program correctly. Regenerate the IDL after any change to instruction signatures.
+The IDL JSON describes all instructions, their account parameters, and argument types. Clients and `spel` itself use this file to call the program correctly. Regenerate the IDL after any change to instruction signatures.
 
 ---
 
-### `lez-cli inspect`
+### `spel inspect`
 
 Show the ImageID (program ID) of the compiled guest binary.
 
 ```bash
-lez-cli inspect
-lez-cli inspect --program ./target/riscv-guest/my_program.elf
-lez-cli inspect --program-id <id>
+spel inspect
+spel inspect --program ./target/riscv-guest/my_program.elf
+spel inspect --program-id <id>
 ```
 
 Output includes three formats:
@@ -97,36 +97,36 @@ Output includes three formats:
 
 Use `make inspect` as a shorthand if your Makefile is configured.
 
-> **💡 Tip:** The ImageID changes with every code change, including comments and formatting. Always run `lez-cli inspect` after a build to confirm you have the ImageID you expect before deploying.
+> **💡 Tip:** The ImageID changes with every code change, including comments and formatting. Always run `spel inspect` after a build to confirm you have the ImageID you expect before deploying.
 
 ---
 
-### `lez-cli pda`
+### `spel pda`
 
 Derive a PDA (Program Derived Address) from seeds and a program ID.
 
 ```bash
-lez-cli pda --seeds '["my_seed", "another_seed"]' --program-id <id>
-lez-cli pda --seeds '["state"]' --program-id <id>
+spel pda --seeds '["my_seed", "another_seed"]' --program-id <id>
+spel pda --seeds '["state"]' --program-id <id>
 ```
 
 Seeds are passed as a JSON array. Supported seed types:
 - String seeds: `"my_seed"` — works correctly
 - Bytes seeds: `[1, 2, 3]` — check your version for support
 
-> **⚠️ Warning:** `lez-cli pda` produces incorrect addresses for `u64` and `u128` integer seeds. For programs with integer seeds, derive the address from sequencer logs during the first `init` call instead. See [Gotchas #3](../part5/gotchas.md#3-lez-cli-pda-gives-wrong-addresses-for-u64u128-seeds).
+> **⚠️ Warning:** `spel pda` produces incorrect addresses for `u64` and `u128` integer seeds. For programs with integer seeds, derive the address from sequencer logs during the first `init` call instead. See [Gotchas #3](../part5/gotchas.md#3-spel-pda-gives-wrong-addresses-for-u64u128-seeds).
 
 > **💡 Tip:** String seeds are always safe. Encode integer seeds as strings (`format!("user:{}", user_id)`) to avoid this bug.
 
 ---
 
-### `lez-cli deploy`
+### `spel deploy`
 
 Register the program's ImageID with the sequencer, making it callable.
 
 ```bash
-lez-cli deploy
-lez-cli deploy --program ./target/riscv-guest/my_program.elf
+spel deploy
+spel deploy --program ./target/riscv-guest/my_program.elf
 make deploy
 ```
 
@@ -139,7 +139,7 @@ Run this after `make setup` (which creates the program account). Deploying an al
 Call a specific instruction on a deployed program.
 
 ```bash
-lez-cli call \
+spel call \
   --idl program.json \
   --instruction <instruction_name> \
   --<account_name>-account <address> \
@@ -158,13 +158,13 @@ lez-cli call \
 
 ```bash
 # Initialize with a single signer account
-lez-cli call \
+spel call \
   --idl program.json \
   --instruction initialize \
   --authority-account 5Kg8cfY8iAiFEBzQPiTVPDLDTvBpMfQ6VFyiKNfJNQ3
 
 # Deposit with two accounts and a u64 argument
-lez-cli call \
+spel call \
   --idl program.json \
   --instruction deposit \
   --vault-account <vault-addr> \
@@ -172,7 +172,7 @@ lez-cli call \
   --amount 1000000
 
 # Batch update with rest accounts (variadic)
-lez-cli call \
+spel call \
   --idl program.json \
   --instruction batch_update \
   --authority-account <auth-addr> \
@@ -193,10 +193,10 @@ make cli ARGS="deposit --vault-account <vault> --depositor-account <dep> --amoun
 
 ### `--bin-<NAME>` Flag (CPI)
 
-When calling an instruction that performs CPI (Cross-Program Invocation), pass the dependency program binary so `lez-cli` can include it in the call context:
+When calling an instruction that performs CPI (Cross-Program Invocation), pass the dependency program binary so `spel` can include it in the call context:
 
 ```bash
-lez-cli call \
+spel call \
   --idl program.json \
   --instruction cpi_instruction \
   --bin-token_program ./deps/token_program.elf \
@@ -327,14 +327,14 @@ Useful for diagnosing connection issues before attempting transactions.
 
 ---
 
-## lez-client-gen
+## spel-client-gen
 
-`lez-client-gen` generates typed client code from a LEZ program IDL. Use it to produce safe, ergonomic client bindings instead of calling `lez-cli` directly from application code.
+`spel-client-gen` generates typed client code from a LEZ program IDL. Use it to produce safe, ergonomic client bindings instead of calling `spel` directly from application code.
 
 ### Basic Usage
 
 ```bash
-lez-client-gen \
+spel-client-gen \
   --idl program.json \
   --out-dir ./generated/
 ```
@@ -351,7 +351,7 @@ lez-client-gen \
 
 ### Output
 
-`lez-client-gen` produces Rust source files in `--out-dir` containing:
+`spel-client-gen` produces Rust source files in `--out-dir` containing:
 
 - Typed instruction builder structs for each instruction
 - Account argument types matching the IDL
@@ -362,10 +362,10 @@ lez-client-gen \
 
 ```bash
 # Generate Rust client bindings
-lez-client-gen --idl program.json --out-dir ./crates/program-client/src/generated/
+spel-client-gen --idl program.json --out-dir ./crates/program-client/src/generated/
 
 # Generate with C header for FFI consumers
-lez-client-gen \
+spel-client-gen \
   --idl program.json \
   --out-dir ./clients/ffi/ \
   --emit-header \

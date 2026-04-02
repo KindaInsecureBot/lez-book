@@ -59,7 +59,7 @@ A program is a Rust crate compiled to `riscv32im` (RISC-V 32-bit) and loaded int
 #![no_main]
 use nssa_core::account::AccountWithMetadata;
 use nssa_core::program::AccountPostState;
-use lez_framework::prelude::*;
+use spel_framework::prelude::*;
 risc0_zkvm::guest::entry!(main);
 
 #[lez_program]
@@ -365,7 +365,7 @@ The equivalent is the **IDL** (Interface Definition Language), a JSON file gener
 - All account structs and their fields
 - The program's ImageID
 
-`lez-cli` uses the IDL to generate typed client code. The `make cli` target in scaffolded projects reads the IDL to know how to serialize instruction calls.
+`spel` uses the IDL to generate typed client code. The `make cli` target in scaffolded projects reads the IDL to know how to serialize instruction calls.
 
 ```bash
 # After build, your IDL is at:

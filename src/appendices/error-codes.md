@@ -159,7 +159,7 @@ pub const ERR_NOT_YOUR_TURN: u32        = 6004;
 pub const ERR_INVALID_MOVE: u32         = 6005;
 ```
 
-> **🔄 Coming from Solidity?** In Solidity, you define custom errors with `error MyError(uint256 param)` and revert with `revert MyError(value)`. In LEZ, custom errors are `u32` codes wrapped in `LezError::Custom(...)`. There is currently no support for attaching structured data to a custom error — if you need to communicate error details, log them via `lez_framework::log!` before returning the error.
+> **🔄 Coming from Solidity?** In Solidity, you define custom errors with `error MyError(uint256 param)` and revert with `revert MyError(value)`. In LEZ, custom errors are `u32` codes wrapped in `LezError::Custom(...)`. There is currently no support for attaching structured data to a custom error — if you need to communicate error details, log them via `spel_framework::log!` before returning the error.
 
 > **💡 Tip:** Export your error constants from a dedicated module and keep them in sync with your IDL's error section. Clients can use these constants to display human-readable error messages.
 

@@ -151,7 +151,7 @@ Manual checks you still need to do:
 #![no_main]
 use nssa_core::account::AccountWithMetadata;
 use nssa_core::program::AccountPostState;
-use lez_framework::prelude::*;
+use spel_framework::prelude::*;
 risc0_zkvm::guest::entry!(main);
 
 #[lez_program]

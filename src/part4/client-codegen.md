@@ -1,11 +1,11 @@
 # Client Code Generation
 
-## What Is lez-client-gen?
+## What Is spel-client-gen?
 
-`lez-client-gen` reads your program's IDL and generates typed client code. This is how you integrate LEZ programs into applications.
+`spel-client-gen` reads your program's IDL and generates typed client code. This is how you integrate LEZ programs into applications.
 
 ```bash
-lez-client-gen --idl counter.json --out-dir ./client/
+spel-client-gen --idl counter.json --out-dir ./client/
 ```
 
 ## Generated Rust Client
@@ -45,7 +45,7 @@ impl CounterClient {
 For integrating with non-Rust applications (e.g., C, Swift, Kotlin via FFI):
 
 ```bash
-lez-client-gen --idl counter.json --out-dir ./ffi/ --target c
+spel-client-gen --idl counter.json --out-dir ./ffi/ --target c
 ```
 
 Generated C header:

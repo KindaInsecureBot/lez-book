@@ -8,10 +8,10 @@ This chapter walks through a fully reproducible development environment for LEZ 
 
 There are two paths for getting a local sequencer running:
 
-- **Quick start (Docker)**: Docker + Docker Compose, Rust, RISC Zero, `lez-cli`. Gets a sequencer running in minutes without building `sequencer_service` from source. Recommended for most developers.
+- **Quick start (Docker)**: Docker + Docker Compose, Rust, RISC Zero, `spel`. Gets a sequencer running in minutes without building `sequencer_service` from source. Recommended for most developers.
 - **From source (Advanced)**: Everything above, plus building `sequencer_service` and `wallet` from source. For contributors or when you need to modify the sequencer or wallet.
 
-Both paths converge at `lez-cli` setup and use the same wallet CLI and verification steps.
+Both paths converge at `spel` setup and use the same wallet CLI and verification steps.
 
 ---
 
@@ -108,14 +108,14 @@ The `-v` flag removes the Docker volumes. Omit it if you want to preserve state 
 
 ---
 
-## Step 4: Clone and Build lez-cli
+## Step 4: Clone and Build spel
 
-`lez-cli` lives in the `spel` monorepo alongside the SPEL macro framework and the client code generator.
+`spel` lives in the `spel` monorepo alongside the SPEL macro framework and the client code generator.
 
 ```bash
 git clone https://github.com/logos-co/spel.git ~/spel
 cd ~/spel
-cargo build --release -p lez-cli --jobs 2
+cargo build --release -p spel --jobs 2
 # Add the built binary to your PATH for the current session
 export PATH="$PATH:$HOME/spel/target/release"
 ```
@@ -130,8 +130,8 @@ source ~/.bashrc
 **What's in the `spel` monorepo:**
 
 - `spel` — the SPEL procedural macro framework (`#[lez_program]`, `#[instruction]`, etc.)
-- `lez-cli` — the primary developer CLI for scaffolding, deploying, and calling programs
-- `lez-client-gen` — generates typed client code (TypeScript or Rust) from a program IDL
+- `spel` — the primary developer CLI for scaffolding, deploying, and calling programs
+- `spel-client-gen` — generates typed client code (TypeScript or Rust) from a program IDL
 
 ---
 
@@ -143,8 +143,8 @@ Run these checks to confirm the full stack is operational:
 # Sequencer health check (via wallet)
 wallet check-health
 
-# lez-cli version
-lez-cli --version
+# spel version
+spel --version
 
 # Wallet account list (should show pre-configured genesis accounts)
 wallet account ls
@@ -205,7 +205,7 @@ cargo build --release --features standalone -p sequencer_service -p wallet --job
 
 > **⚠️ Warning:** Use `--jobs 2` on machines with limited RAM. RISC Zero guest compilation is extremely memory-hungry. OOM kills during compilation will silently produce corrupted or incomplete binaries without a clear error message. If your build fails unexpectedly, reduce parallelism first.
 
-**A note on version pinning:** `lez-cli` pins to a specific `logos-execution-zone` revision internally. If you encounter RPC errors when calling the sequencer, check which revision `lez-cli` expects. The `main` branch is generally safe. Known bad revision: `767b5af` has a broken commitment RPC — avoid checking out that specific commit.
+**A note on version pinning:** `spel` pins to a specific `logos-execution-zone` revision internally. If you encounter RPC errors when calling the sequencer, check which revision `spel` expects. The `main` branch is generally safe. Known bad revision: `767b5af` has a broken commitment RPC — avoid checking out that specific commit.
 
 ### Starting the Local Sequencer
 
@@ -271,7 +271,7 @@ just run-wallet account ls
 
 The debug config ships with pre-funded genesis accounts you can use immediately for development. Derived accounts (PDAs, program-derived addresses) are owned by programs and cannot sign transactions by themselves. When LEZ instructions require a `#[account(signer)]`, it must be a genesis account.
 
-Once the wallet is set up, continue with **Step 4** (lez-cli) and **Step 5** (Verify Everything) above.
+Once the wallet is set up, continue with **Step 4** (spel) and **Step 5** (Verify Everything) above.
 
 ---
 
@@ -341,8 +341,8 @@ source ~/.bashrc
 | `error: toolchain 'riscv32im...' not found` | RISC Zero guest toolchain not installed | Run `rzup install` again |
 | Build OOM / silent binary corruption | Too many parallel compile jobs | Add `--jobs 2` to `cargo build` |
 | `RocksDB error` on sequencer start | Stale state from old version | Run `just clean` from `~/lez` and restart |
-| RPC errors from `lez-cli` | `logos-execution-zone` version mismatch | Check which revision `lez-cli` expects; avoid rev `767b5af` |
-| `lez-cli: command not found` | Binary not on PATH | Add `$HOME/spel/target/release` to your `PATH` |
+| RPC errors from `spel` | `logos-execution-zone` version mismatch | Check which revision `spel` expects; avoid rev `767b5af` |
+| `spel: command not found` | Binary not on PATH | Add `$HOME/spel/target/release` to your `PATH` |
 | `wallet: connection refused` | Sequencer not running | Start sequencer via `docker compose up` (Docker) or `just run-sequencer` (source) |
 | `wallet check-health` fails | `NSSA_WALLET_HOME_DIR` not set or wrong path | Set `export NSSA_WALLET_HOME_DIR="$HOME/lez/wallet/configs/debug"` |
 | `wallet account ls` shows nothing | Wrong config directory | Verify `NSSA_WALLET_HOME_DIR` points to `lez/wallet/configs/debug` |

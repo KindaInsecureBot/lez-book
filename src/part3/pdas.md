@@ -152,9 +152,9 @@ fn to_seed(coord: i64) -> u64 {
 
 This ensures negative coordinates don't cause issues with seed derivation.
 
-## The lez-cli pda Bug
+## The spel pda Bug
 
-> **⚠️ Warning:** `lez-cli pda` gives WRONG addresses for `u64` and `u128` arg seeds. It has a serialization discrepancy with the on-chain derivation. When building tooling that needs to pre-compute PDA addresses with numeric seeds, compute them yourself using SHA-256 matching the on-chain logic, or derive them from the deployed program's behavior. Literal and account seeds work correctly.
+> **⚠️ Warning:** `spel pda` gives WRONG addresses for `u64` and `u128` arg seeds. It has a serialization discrepancy with the on-chain derivation. When building tooling that needs to pre-compute PDA addresses with numeric seeds, compute them yourself using SHA-256 matching the on-chain logic, or derive them from the deployed program's behavior. Literal and account seeds work correctly.
 
 ## Computing PDAs Manually
 

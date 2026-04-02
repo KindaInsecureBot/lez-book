@@ -1,6 +1,6 @@
 # Appendix B: Type Format Table
 
-This appendix documents how to pass argument values to `lez-cli`'s `--<arg-name>` flags. The format depends on the LEZ type as declared in your program's IDL.
+This appendix documents how to pass argument values to `spel`'s `--<arg-name>` flags. The format depends on the LEZ type as declared in your program's IDL.
 
 ---
 
@@ -71,7 +71,7 @@ Accounts are passed using dedicated flags, not `--arg` style:
 --vault-account      AbCdEfGh1234...
 
 # Each account gets its own flag
-lez-cli call \
+spel call \
   --idl program.json \
   --instruction transfer \
   --from-account <addr1> \
@@ -89,7 +89,7 @@ Regular accounts use one flag per account: `--{name}-account <addr>`. You cannot
 
 ```bash
 # ✅ Correct: one flag per account
-lez-cli call --idl p.json --instruction my_ix \
+spel call --idl p.json --instruction my_ix \
   --player-account <addr1> \
   --config-account <addr2> \
   --vault-account <addr3>
@@ -101,7 +101,7 @@ Rest accounts use `--{name}` (no `-account` suffix) with a comma-separated list:
 
 ```bash
 # ✅ Correct: comma-separated, no spaces around commas, no -account suffix
-lez-cli call --idl p.json --instruction batch_update \
+spel call --idl p.json --instruction batch_update \
   --authority-account <auth-addr> \
   --targets addr1,addr2,addr3,addr4
 
@@ -119,10 +119,10 @@ lez-cli call --idl p.json --instruction batch_update \
 
 ## PDA Seed Formats
 
-The `lez-cli pda` command accepts seeds as a JSON array string:
+The `spel pda` command accepts seeds as a JSON array string:
 
 ```bash
-lez-cli pda \
+spel pda \
   --seeds '["seed_string", "another_string"]' \
   --program-id <image-id>
 ```
@@ -139,16 +139,16 @@ lez-cli pda \
 
 ```bash
 # Single string seed
-lez-cli pda --seeds '["global_state"]' --program-id <id>
+spel pda --seeds '["global_state"]' --program-id <id>
 
 # Multiple seeds
-lez-cli pda --seeds '["user", "5Kg8cf..."]' --program-id <id>
+spel pda --seeds '["user", "5Kg8cf..."]' --program-id <id>
 
 # String + bytes
-lez-cli pda --seeds '["vault", [1, 0, 0, 0]]' --program-id <id>
+spel pda --seeds '["vault", [1, 0, 0, 0]]' --program-id <id>
 ```
 
-> **⚠️ Warning:** `lez-cli pda` produces incorrect addresses for `u64` and `u128` integer seeds. Use string seeds when possible, or derive PDA addresses from sequencer logs instead of the CLI. See [Gotchas #3](../part5/gotchas.md#3-lez-cli-pda-gives-wrong-addresses-for-u64u128-seeds).
+> **⚠️ Warning:** `spel pda` produces incorrect addresses for `u64` and `u128` integer seeds. Use string seeds when possible, or derive PDA addresses from sequencer logs instead of the CLI. See [Gotchas #3](../part5/gotchas.md#3-spel-pda-gives-wrong-addresses-for-u64u128-seeds).
 
 ---
 

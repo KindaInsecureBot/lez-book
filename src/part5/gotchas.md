@@ -78,16 +78,16 @@ impl BorshDeserialize for MyState {
 
 ---
 
-## 3. `lez-cli pda` Gives Wrong Addresses for u64/u128 Seeds
+## 3. `spel pda` Gives Wrong Addresses for u64/u128 Seeds
 
-**Explanation:** The `lez-cli pda` command has a known bug where integer seeds (u64, u128) are not serialized correctly when computing PDA addresses. The CLI produces an address that does not match what the sequencer assigns during an `init` call. String seeds work correctly.
+**Explanation:** The `spel pda` command has a known bug where integer seeds (u64, u128) are not serialized correctly when computing PDA addresses. The CLI produces an address that does not match what the sequencer assigns during an `init` call. String seeds work correctly.
 
 **Symptoms:**
-- PDA address from `lez-cli pda` doesn't match the address shown in sequencer logs after initialization
+- PDA address from `spel pda` doesn't match the address shown in sequencer logs after initialization
 - Subsequent calls using the CLI-derived address fail with `InvalidAccountOwner` or account-not-found errors
 - Everything looks right on the client side but the sequencer rejects the account
 
-**Fix:** For programs that use integer seeds, get the canonical PDA address from the sequencer logs during the first successful `init` call, not from `lez-cli pda`:
+**Fix:** For programs that use integer seeds, get the canonical PDA address from the sequencer logs during the first successful `init` call, not from `spel pda`:
 
 ```bash
 # Initialize and capture the assigned PDA address from sequencer output
@@ -270,7 +270,7 @@ pub fn deposit(
 **Explanation:** RISC Zero proof generation is extremely memory-intensive. By default, the prover uses all available CPU cores and launches multiple parallel proof jobs, easily exhausting RAM on a typical developer machine. When memory runs out, the OS OOM killer silently terminates the prover process and the CLI appears to hang indefinitely.
 
 **Symptoms:**
-- `lez-cli` or `make proof` hangs for many minutes with no output
+- `spel` or `make proof` hangs for many minutes with no output
 - System becomes unresponsive or starts swapping heavily
 - No error message — the CLI stops making progress
 - `dmesg | grep oom` shows OOM kill events
@@ -279,9 +279,9 @@ pub fn deposit(
 
 ```bash
 # Explicit flags
-lez-cli prove --cores 2 --max-jobs 2
+spel prove --cores 2 --max-jobs 2
 
-# Or via environment variables (verify names for your lez-cli version)
+# Or via environment variables (verify names for your spel version)
 RISC0_PROVER_CORES=2 RISC0_MAX_JOBS=2 make proof
 ```
 
@@ -293,10 +293,10 @@ RISC0_PROVER_CORES=2 RISC0_MAX_JOBS=2 make proof
 
 ## 10. Rest Account Flag Is `--{name}` Not `--{name}-account`
 
-**Explanation:** In `lez-cli`, regular single accounts use `--{name}-account <addr>`. However, variadic "rest" accounts use a different flag format: `--{name}` (no `-account` suffix), and accept a comma-separated list of addresses.
+**Explanation:** In `spel`, regular single accounts use `--{name}-account <addr>`. However, variadic "rest" accounts use a different flag format: `--{name}` (no `-account` suffix), and accept a comma-separated list of addresses.
 
 **Symptoms:**
-- `lez-cli` errors with: `unexpected argument '--players-account'`
+- `spel` errors with: `unexpected argument '--players-account'`
 - Or the argument is silently accepted but only the first address is used
 - Account count mismatch at the sequencer because rest accounts weren't passed correctly
 
@@ -304,15 +304,15 @@ RISC0_PROVER_CORES=2 RISC0_MAX_JOBS=2 make proof
 
 ```bash
 # ❌ Wrong: -account suffix for rest accounts
-lez-cli call --idl program.json --instruction update_scores \
+spel call --idl program.json --instruction update_scores \
   --players-account addr1,addr2,addr3
 
 # ✅ Correct: no -account suffix, comma-separated list
-lez-cli call --idl program.json --instruction update_scores \
+spel call --idl program.json --instruction update_scores \
   --players addr1,addr2,addr3
 
 # Regular single accounts still use -account:
-lez-cli call --idl program.json --instruction initialize \
+spel call --idl program.json --instruction initialize \
   --authority-account <genesis-addr> \
   --config-account <pda-addr>
 ```
@@ -321,13 +321,13 @@ lez-cli call --idl program.json --instruction initialize \
 
 ---
 
-## 11. `lez-cli init` Scaffold Missing RISC Zero Metadata in `methods/Cargo.toml`
+## 11. `spel init` Scaffold Missing RISC Zero Metadata in `methods/Cargo.toml`
 
-**Explanation:** The `lez-cli init <name>` scaffold generates a workspace, but the generated `methods/Cargo.toml` omits the `[[package.metadata.risc0.methods]]` section that tells the RISC Zero build system which guest binaries to compile. Without this section, `cargo build` succeeds but does not produce the correct guest ELF binary.
+**Explanation:** The `spel init <name>` scaffold generates a workspace, but the generated `methods/Cargo.toml` omits the `[[package.metadata.risc0.methods]]` section that tells the RISC Zero build system which guest binaries to compile. Without this section, `cargo build` succeeds but does not produce the correct guest ELF binary.
 
 **Symptoms:**
 - `cargo build` succeeds with no errors
-- `lez-cli inspect` fails: cannot find guest binary
+- `spel inspect` fails: cannot find guest binary
 - The `target/riscv-guest/` directory is empty or missing expected ELF files
 - Build log shows no RISC Zero guest compilation step
 
@@ -386,7 +386,7 @@ guest_path = "guest"     # path to the guest crate relative to methods/
 **Symptoms:**
 - Link errors after adding or removing guest dependencies: `undefined reference to ...`
 - Program behaves as if an old version is running despite successful rebuild
-- `make build` succeeds but `lez-cli inspect` shows an outdated ImageID
+- `make build` succeeds but `spel inspect` shows an outdated ImageID
 - Errors referencing symbols that should no longer exist
 
 **Fix:**
@@ -416,7 +416,7 @@ Use this table to quickly map symptoms to causes and fixes.
 | `can't find crate for 'proc_macro'` | `borsh_derive` or other proc-macro in guest | Remove proc-macro crates from guest; use manual borsh impls |
 | CLI hangs during proof generation | OOM on constrained host | Add `--cores 2 --max-jobs 2` |
 | Account count mismatch at sequencer | Missing accounts in `post_states` | Return all received accounts, including unmodified ones |
-| PDA address from CLI doesn't match sequencer | `lez-cli pda` bug with integer seeds | Get address from sequencer logs on first `init` call |
+| PDA address from CLI doesn't match sequencer | `spel pda` bug with integer seeds | Get address from sequencer logs on first `init` call |
 | Commitment queries return empty results | `lssa` on broken revision `767b5af` | Switch to `main` branch |
 | Mysterious commitment mismatch after restart | Stale RocksDB state | `just clean` from `~/lez` before restarting |
 | Signature validation error with PDA signer | PDA passed where genesis account required | Use a genesis (keypair) account as signer |

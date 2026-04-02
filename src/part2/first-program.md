@@ -47,7 +47,7 @@ contract Counter {
 ## Step 1: Scaffold the Project
 
 ```bash
-lez-cli init counter
+spel init counter
 cd counter
 ```
 
@@ -80,9 +80,9 @@ counter/
 - **`counter_core/`** — shared types used by both the guest and the IDL generator. Put your state struct definitions and manual serialization helpers here. Note: the crate is named `counter_core`, not `core`.
 - **`methods/guest/src/bin/counter.rs`** — the actual on-chain program. This is NOT `main.rs` — it lives in `bin/`. Contains `#![no_main]`, `risc0_zkvm::guest::entry!(main)`, and your `#[lez_program]` module.
 - **`examples/src/bin/generate_idl.rs`** — generates the IDL JSON. Run via `make idl` or `cargo run --example generate_idl`.
-- **`examples/src/bin/counter_cli.rs`** — 3-line CLI wrapper that `lez-cli` uses to dispatch instruction calls.
+- **`examples/src/bin/counter_cli.rs`** — 3-line CLI wrapper that `spel` uses to dispatch instruction calls.
 
-> **⚠️ Warning:** The scaffold from `lez-cli init` may be missing `risc0-zkvm` metadata in `methods/Cargo.toml`. If you get build errors about missing zkVM crate features or a missing `risc0` dependency, open `methods/Cargo.toml` and verify that the risc0 dependencies are present and have the correct feature flags for your toolchain version.
+> **⚠️ Warning:** The scaffold from `spel init` may be missing `risc0-zkvm` metadata in `methods/Cargo.toml`. If you get build errors about missing zkVM crate features or a missing `risc0` dependency, open `methods/Cargo.toml` and verify that the risc0 dependencies are present and have the correct feature flags for your toolchain version.
 
 ---
 
@@ -136,7 +136,7 @@ In `methods/guest/src/bin/counter.rs`, define the program with its instructions.
 use counter_core::CounterState;
 use nssa_core::account::AccountWithMetadata;
 use nssa_core::program::AccountPostState;
-use lez_framework::prelude::*;
+use spel_framework::prelude::*;
 risc0_zkvm::guest::entry!(main);
 
 #[lez_program]
@@ -243,7 +243,7 @@ cargo build --release --jobs 2
 
 The build compiles two targets:
 
-1. The native host binary (used by `lez-cli` and the CLI wrapper)
+1. The native host binary (used by `spel` and the CLI wrapper)
 2. The `riscv32im` guest binary that runs inside the RISC Zero zkVM to generate proofs
 
 > **💡 Tip:** The first build takes significantly longer than subsequent builds because the RISC Zero guest compiler bootstraps from scratch. Expect several minutes on the first run. Subsequent incremental builds are much faster.
@@ -335,10 +335,10 @@ Every counter instance is a separate state account on-chain. Create one by calli
 make cli ARGS="initialize --counter <account-address> --authority <your-genesis-account>"
 ```
 
-Or call `lez-cli` directly:
+Or call `spel` directly:
 
 ```bash
-lez-cli call --idl counter.json \
+spel call --idl counter.json \
   --instruction initialize \
   --counter <account-address> \
   --authority <your-genesis-account>
@@ -360,7 +360,7 @@ wallet account inspect <account-address>
 
 The `wallet account inspect` output shows the raw bytes of the account's `data` field. You'll need to deserialize them manually using your `CounterState::from_bytes` function. After one `increment` call, the first 8 bytes should decode to `count: 1`.
 
-> **🔄 Coming from Solidity?** In Solidity, you'd call `counter.getCount()` via `eth_call` — a read-only simulation that runs your contract code. **LEZ has no equivalent of `eth_call` or `view` functions.** There is no separate "read" path. State reads work by fetching raw account data from the sequencer and deserializing it off-chain. Use `wallet account inspect <account-id>` to view raw bytes, or `lez-cli --dry-run` to simulate an instruction call without submitting a transaction. The `get_count` instruction in our program exists only when you need a verified, ZK-proved read that appears in the transaction log.
+> **🔄 Coming from Solidity?** In Solidity, you'd call `counter.getCount()` via `eth_call` — a read-only simulation that runs your contract code. **LEZ has no equivalent of `eth_call` or `view` functions.** There is no separate "read" path. State reads work by fetching raw account data from the sequencer and deserializing it off-chain. Use `wallet account inspect <account-id>` to view raw bytes, or `spel --dry-run` to simulate an instruction call without submitting a transaction. The `get_count` instruction in our program exists only when you need a verified, ZK-proved read that appears in the transaction log.
 
 ---
 
@@ -379,7 +379,7 @@ This shows the raw bytes stored in the account's `data` field. Deserialize them 
 **Option 2: Dry-run an instruction**
 
 ```bash
-lez-cli call --idl counter.json \
+spel call --idl counter.json \
   --instruction get_count \
   --dry-run \
   --counter <account-address>
@@ -407,4 +407,4 @@ The next chapters cover:
 - **Multiple accounts per instruction** — programs that read and write several accounts in a single atomic transaction
 - **Program-derived addresses (PDAs)** — deterministic account addresses owned by your program
 - **Cross-program invocations** — calling another program's instructions from within yours
-- **Client code generation** — using `lez-client-gen` to produce a typed TypeScript client from your IDL
+- **Client code generation** — using `spel-client-gen` to produce a typed TypeScript client from your IDL

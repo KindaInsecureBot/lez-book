@@ -167,7 +167,7 @@ Your code is step 4. Everything else is the protocol.
 
 ## Working Setup: Running Private Attestations
 
-`lez-cli` cannot sign for private accounts — you must use the wallet Rust API. Here is a complete working workflow:
+`spel` cannot sign for private accounts — you must use the wallet Rust API. Here is a complete working workflow:
 
 ```bash
 # 1. Build logos-execution-zone from the main branch
@@ -204,7 +204,7 @@ wallet auth-transfer send \
 wallet account sync-private
 
 # 7. Deploy your program
-lez-cli deploy --program ./target/riscv-guest/release/balance_attestation
+spel deploy --program ./target/riscv-guest/release/balance_attestation
 
 # 8. Run the attestation via wallet Rust API (see below)
 ```

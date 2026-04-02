@@ -214,7 +214,7 @@ wallet auth-transfer send \
 
 ## Using Custom Programs with Private Transactions
 
-`lez-cli` **cannot sign for private accounts**. For custom programs that touch private accounts, you must use the wallet Rust API directly.
+`spel` **cannot sign for private accounts**. For custom programs that touch private accounts, you must use the wallet Rust API directly.
 
 ```rust
 use nssa::program::Program;
@@ -329,7 +329,7 @@ If you need to hide which program was called, that requires a different architec
 ## Troubleshooting Private Transactions
 
 **"Proof generation failed"**
-- Your program panicked inside the zkVM. Test with public accounts first using `lez-cli` to validate the logic, then switch to private.
+- Your program panicked inside the zkVM. Test with public accounts first using `spel` to validate the logic, then switch to private.
 
 **"Nullifier already exists"**
 - You tried to spend the same commitment twice. Run `wallet account sync-private` to refresh your local state — your wallet may have a stale view of which commitments you've spent.
@@ -341,7 +341,7 @@ If you need to hide which program was called, that requires a different architec
 - The commitment tree has advanced since you last synced. Run `wallet account sync-private` and retry.
 
 **"Cannot sign for private account"**
-- You're using `lez-cli` to call an instruction that touches a private account. Switch to the wallet Rust API. `lez-cli` can only sign for public accounts.
+- You're using `spel` to call an instruction that touches a private account. Switch to the wallet Rust API. `spel` can only sign for public accounts.
 
 **"Invalid balance conservation"**
 - Your program's logic doesn't preserve total balance across all accounts. The privacy circuit checks that `sum(inputs) == sum(outputs)`. Fees, if any, are deducted from balance explicitly.
@@ -349,7 +349,7 @@ If you need to hide which program was called, that requires a different architec
 ## Critical Notes
 
 - **Private transfers generate ZK proofs locally** — this is CPU-intensive. Expect seconds to minutes depending on your hardware.
-- **`lez-cli` cannot sign for private accounts** — use the wallet Rust API.
+- **`spel` cannot sign for private accounts** — use the wallet Rust API.
 - **Same program binary** runs for both public and private transactions — no code changes needed.
 - **Test with public first** — get your program logic correct with simple public transactions, then use it privately in production.
 - **Sync before spend** — `wallet account sync-private` fetches fresh Merkle proofs. Stale proofs cause failed transactions.
