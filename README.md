@@ -1,5 +1,7 @@
 # LEZ Development Guide
 
+> **Disclaimer:** This is a personal, experimental hobby project. It is not an official Logos product. Not audited.
+
 A comprehensive guide for EVM/Solidity developers transitioning to LEZ/SPEL on-chain program development.
 
 ## What is LEZ?
